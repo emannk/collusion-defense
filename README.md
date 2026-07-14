@@ -1,6 +1,4 @@
-# RING
-
-**Anonymous repository for the submission to IEEE S&P 2027:** *Your Privacy My Cloak: Backdoor Attack on Differentially Private Federated Learning*
+# Collusion Attack - Defense 
 
 ## Description
 
@@ -14,6 +12,8 @@ This repository contains one main python file and one environment configuration 
 
 - `BD_Attack_Collusion.py`: Main implementation for evaluating the RING attack under DP-FL against state-of-the-art defenses.
 - `environment.yml`: Conda environment specification listing all required dependencies.
+
+The analysis folder contains script to process the data resulting from simulation runs. Further info is in README_logging
 
 ## Running example
 
@@ -184,3 +184,6 @@ The default value is standard, which preserves the original visible-trigger / RI
 
 - `--serial`  
   Enable serial execution to reduce GPU memory usage when using **Opacus**.
+
+Built upon  **Anonymous repository for the submission to IEEE S&P 2027:** *Your Privacy My Cloak: Backdoor Attack on Differentially Private Federated Learning*
+
