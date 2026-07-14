@@ -1,0 +1,16 @@
+# Dataset
+data/cifar/
+data/mnist/
+data/sentiment-140/
+*.pyc
+*.pyo
+# Python bytecode
+__pycache__/
+*.py[cod]
+.idea/
+.vscode/
+.env.*
+venv/
+# Model checkpoints and outputs
+
+data/sentiment-140/
