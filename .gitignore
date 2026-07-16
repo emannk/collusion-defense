@@ -12,5 +12,3 @@ __pycache__/
 .env.*
 venv/
 # Model checkpoints and outputs
-
-data/sentiment-140/

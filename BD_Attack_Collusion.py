@@ -347,6 +347,37 @@ def get_update(update, model):
         update2[key] = u - m
     return update2
 
+#Groups update gradients into sub-groups of size group_size, and returns the averaged update for each group 
+# Defense Idea - Mimicking larger dataset
+def grouped_updates(updates, lengths, group_size, seed):
+    rng = np.random.default_rng(seed)
+    indices = np.arange(len(updates))
+    rng.shuffle(indices)
+
+    grouped = []
+    grouped_lengths = []
+    group_members = []
+
+    for start in range(0, len(indices), group_size):
+        members = indices[start:start + group_size]
+        if len(members) == 0:
+            continue
+
+        total_len = sum(lengths[i] for i in members)
+        avg_update = {}
+
+        for k in updates[members[0]].keys():
+            avg_update[k] = sum(
+                updates[i][k] * (lengths[i] / total_len)
+                for i in members
+            )
+
+        grouped.append(avg_update)
+        grouped_lengths.append(total_len)
+        group_members.append(list(map(int, members)))
+
+    return grouped, grouped_lengths, group_members
+
 def generate_attack_updates(target_matrix, num_attackers, noise_std, CGS, clip_min=None, clip_max=None):
     """
     For attackers divided into sub-groups of size CGS, generate updates where
@@ -912,9 +943,34 @@ if __name__ == '__main__':
             if args.defense == 'Deepsight':
                 w_glob = DeepSight(global_model=copy.deepcopy(net_glob), user_list=users_idx, args=args, w_list=w_locals_combine,
                                    w_update=w_updates_combine, per_run=per_run, first_call=first_call, w_length=length_locals, debug=True)
+            # running Krum defense on the groups of gradients
             elif args.defense == 'Krum':
-                w_glob = multi_krum(gradients=w_updates_combine, n_attackers=args.num_attacker, args=args, per_run=per_run,
-                                    first_call=first_call, w_length=length_locals, global_model=copy.deepcopy(net_glob), multi_k=True, debug=True)
+                group_size = getattr(args, "group_size", 1)
+                if group_size > 1:
+                    grouped_updates_list, grouped_lengths, group_members = grouped_updates(
+                        updates=w_updates_combine,
+                        lengths=length_locals,
+                        group_size=group_size,
+                        seed=args.seed + iter
+                    )
+
+                    # Conservative estimate: number of malicious groups.
+                    grouped_n_attackers = min(args.num_attacker, len(grouped_updates_list) // 3)
+
+                    w_glob = multi_krum(
+                        gradients=grouped_updates_list,
+                        n_attackers=grouped_n_attackers,
+                        args=args,
+                        per_run=per_run,
+                        first_call=first_call,
+                        w_length=grouped_lengths,
+                        global_model=copy.deepcopy(net_glob),
+                        multi_k=True,
+                        debug=True
+                    )
+                else:
+                    w_glob = multi_krum(gradients=w_updates_combined, n_attackers=args.num_attacker, args=args, per_run=per_run,
+                                        first_call=first_call, w_length=length_locals, global_model=copy.deepcopy(net_glob), multi_k=True, debug=True)
             elif args.defense == 'Flame':
                 w_glob = flame(local_model=w_locals_combine, update_params=w_updates_combine, global_model=copy.deepcopy(net_glob), args=args, per_run=per_run,
                                     first_call=first_call, w_length=length_locals, debug=True)

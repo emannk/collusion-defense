@@ -8,6 +8,7 @@ def _active_attackers(args, total_clients):
         active = 0
     return max(0, min(active, total_clients))
 
+#To do: Adjust for grouping defense, (the number of attackers is not equal to the number of malicious clients, etc.)
 def _record_defense_stats(args, defense_name, selected_indices, total_clients):
     selected_indices = [int(i) for i in selected_indices]
     active_attackers = _active_attackers(args, total_clients)
