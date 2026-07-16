@@ -98,7 +98,20 @@ def write_to_file(num, fname, dname, clear=False):
 
 CLIENT_LATENCY_FIELDS = [
     "run", "round", "client_id", "selected_slot", "role", "num_samples",
-    "latency_s", "loss", "learning_rate", "attack_type", "defense",
+
+    # Final effective submission latency.
+    # For malicious RING clients this becomes:
+    # local training + peer wait + peer communication + collusion adjustment + upload.
+    "latency_s",
+
+    # Breakdown fields for debugging.
+    "local_train_latency_s",
+    "peer_wait_latency_s",
+    "peer_communication_latency_s",
+    "collusion_adjustment_latency_s",
+    "upload_latency_s",
+
+    "loss", "learning_rate", "attack_type", "defense",
     "dataset", "iid", "frac", "num_attacker", "dp_epsilon", "dp_clip",
 ]
 
@@ -170,7 +183,16 @@ def append_client_latency(client_latency_rows, args, per_run, iter_num, client_i
         "selected_slot": selected_slot,
         "role": role,
         "num_samples": num_samples,
+
+        # At first, latency_s is only local training latency.
+        # Later we overwrite latency_s with effective submission latency.
         "latency_s": latency_s,
+        "local_train_latency_s": latency_s,
+        "peer_wait_latency_s": 0.0,
+        "peer_communication_latency_s": 0.0,
+        "collusion_adjustment_latency_s": 0.0,
+        "upload_latency_s": 0.0,
+
         "loss": safe_to_float(loss),
         "learning_rate": safe_to_float(learning_rate),
         "attack_type": getattr(args, "attack_type", ""),
@@ -183,12 +205,125 @@ def append_client_latency(client_latency_rows, args, per_run, iter_num, client_i
         "dp_clip": getattr(args, "dp_clip", ""),
     })
 
-def latency_summary(client_latency_rows, role):
-    vals = [safe_to_float(row.get("latency_s"), None) for row in client_latency_rows if row.get("role") == role]
+def latency_summary(client_latency_rows, role, field="latency_s"):
+    vals = [
+        safe_to_float(row.get(field), None)
+        for row in client_latency_rows
+        if row.get("role") == role
+    ]
     vals = [v for v in vals if v is not None]
     if not vals:
-        return {"mean": "", "total": 0.0, "count": 0}
-    return {"mean": sum(vals) / len(vals), "total": sum(vals), "count": len(vals)}
+        return {"mean": "", "total": 0.0, "count": 0, "max": ""}
+    return {
+        "mean": sum(vals) / len(vals),
+        "total": sum(vals),
+        "count": len(vals),
+        "max": max(vals),
+    }
+
+def get_float_arg(args, name, default=0.0):
+    value = getattr(args, name, default)
+    if value is None or value == "":
+        return float(default)
+    return float(value)
+
+
+def apply_submission_latency_model(client_latency_rows, args,
+                                   is_collusion_round,
+                                   collusion_adjustment_latency_s):
+    """
+    Convert local training latency into effective submission latency.
+
+    For benign clients:
+        latency_s = local training + upload
+
+    For malicious RING/Collusion clients:
+        latency_s = local training
+                    + waiting for slower malicious peers
+                    + peer communication
+                    + collusion adjustment
+                    + upload
+
+    Because this simulator trains clients sequentially, we approximate parallel FL
+    waiting time as:
+
+        peer_wait = max_malicious_local_train_time - this_client_local_train_time
+
+    This means all malicious clients become ready to submit after the slowest
+    malicious client finishes, plus RING coordination overhead.
+    """
+
+    benign_upload_latency_s = get_float_arg(
+        args,
+        "benign_upload_latency_s",
+        get_float_arg(args, "upload_latency_s", 0.0)
+    )
+
+    malicious_upload_latency_s = get_float_arg(
+        args,
+        "malicious_upload_latency_s",
+        get_float_arg(args, "upload_latency_s", 0.0)
+    )
+
+    ring_peer_communication_latency_s = get_float_arg(
+        args,
+        "ring_peer_communication_latency_s",
+        0.0
+    )
+
+    collusion_adjustment_latency_s = safe_to_float(collusion_adjustment_latency_s, 0.0)
+    if collusion_adjustment_latency_s == "":
+        collusion_adjustment_latency_s = 0.0
+
+    malicious_rows = [
+        row for row in client_latency_rows
+        if row.get("role") == "malicious"
+    ]
+
+    max_malicious_local_train_s = 0.0
+    if malicious_rows:
+        max_malicious_local_train_s = max(
+            float(row.get("local_train_latency_s", row.get("latency_s", 0.0)))
+            for row in malicious_rows
+        )
+
+    for row in client_latency_rows:
+        local_train_latency_s = float(
+            row.get("local_train_latency_s", row.get("latency_s", 0.0))
+        )
+
+        if row.get("role") == "malicious" and is_collusion_round:
+            peer_wait_latency_s = max(
+                0.0,
+                max_malicious_local_train_s - local_train_latency_s
+            )
+
+            row["peer_wait_latency_s"] = peer_wait_latency_s
+            row["peer_communication_latency_s"] = ring_peer_communication_latency_s
+            row["collusion_adjustment_latency_s"] = collusion_adjustment_latency_s
+            row["upload_latency_s"] = malicious_upload_latency_s
+
+            row["latency_s"] = (
+                local_train_latency_s
+                + peer_wait_latency_s
+                + ring_peer_communication_latency_s
+                + collusion_adjustment_latency_s
+                + malicious_upload_latency_s
+            )
+
+        elif row.get("role") == "malicious":
+            row["peer_wait_latency_s"] = 0.0
+            row["peer_communication_latency_s"] = 0.0
+            row["collusion_adjustment_latency_s"] = 0.0
+            row["upload_latency_s"] = malicious_upload_latency_s
+            row["latency_s"] = local_train_latency_s + malicious_upload_latency_s
+
+        else:
+            row["peer_wait_latency_s"] = 0.0
+            row["peer_communication_latency_s"] = 0.0
+            row["collusion_adjustment_latency_s"] = 0.0
+            row["upload_latency_s"] = benign_upload_latency_s
+            row["latency_s"] = local_train_latency_s + benign_upload_latency_s
 
 def default_defense_stats(defense_name, users_idx, idx_benign, idx_attacker):
     selected_indices = list(range(len(users_idx)))
@@ -671,7 +806,7 @@ if __name__ == '__main__':
                         torch.cuda.empty_cache()
                         import gc
                         gc.collect()
-                    if args.attack_type in ('Collusion'):
+                    if args.attack_type == "Collusion":
                         collusion_t0 = time.perf_counter()
                         w_attackers = w_locals[-args.num_attacker:]
                         w_attackers = [{k: v.cpu() for k, v in w.items()} for w in w_attackers]
@@ -725,6 +860,20 @@ if __name__ == '__main__':
                 else:
                     w_locals_combine = w_locals
                     w_updates_combine = w_updates
+
+                is_collusion_round = bool(
+                    args.attack
+                    and iter >= 4
+                    and args.attack_type == "Collusion"
+                    and len(idx_attacker) > 0
+                )
+
+                apply_submission_latency_model(
+                    client_latency_rows=client_latency_rows,
+                    args=args,
+                    is_collusion_round=is_collusion_round,
+                    collusion_adjustment_latency_s=collusion_adjustment_latency_s,
+                )
             else:
                 idx_benign = idxs_users[:]
                 for idx in idxs_users:
