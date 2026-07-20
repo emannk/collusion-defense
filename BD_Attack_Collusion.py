@@ -969,7 +969,7 @@ if __name__ == '__main__':
                         debug=True
                     )
                 else:
-                    w_glob = multi_krum(gradients=w_updates_combined, n_attackers=args.num_attacker, args=args, per_run=per_run,
+                    w_glob = multi_krum(gradients=w_updates_combine, n_attackers=args.num_attacker, args=args, per_run=per_run,
                                         first_call=first_call, w_length=length_locals, global_model=copy.deepcopy(net_glob), multi_k=True, debug=True)
             elif args.defense == 'Flame':
                 w_glob = flame(local_model=w_locals_combine, update_params=w_updates_combine, global_model=copy.deepcopy(net_glob), args=args, per_run=per_run,
