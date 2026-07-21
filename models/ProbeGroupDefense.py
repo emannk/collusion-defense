@@ -585,19 +585,21 @@ def ProbeGroupDefense(
             score_summary=score_summary,
         )
 
-    print("ProbeGroup candidate suspicious groups: {}/{}".format(len(candidate_suspicious_groups), len(group_records)))
-    print("ProbeGroup memory-updated suspicious groups: {}/{}".format(len(suspicious_groups), len(group_records)))
-    print("ProbeGroup attack evidence:", compact_attack_evidence(attack_evidence))
-    print_probe_score_summary(score_summary)
-    print("ProbeGroup client risk:", [round(float(x), 3) for x in risk.tolist()])
-    print("ProbeGroup individual risk:", [round(float(x), 3) for x in individual_risk.tolist()])
-    print("ProbeGroup pair pressure:", [round(float(x), 3) for x in pair_pressure.tolist()])
-    print("ProbeGroup persistent pair pressure:", [round(float(x), 3) for x in persistent_pair_pressure.tolist()])
-    print("ProbeGroup final persistent risk:", [round(float(x), 3) for x in final_persistent_risk.tolist()])
+    
+    # print("ProbeGroup candidate suspicious groups: {}/{}".format(len(candidate_suspicious_groups), len(group_records)))
+    # print("ProbeGroup memory-updated suspicious groups: {}/{}".format(len(suspicious_groups), len(group_records)))
+    # print("ProbeGroup attack evidence:", compact_attack_evidence(attack_evidence))
+    # print_probe_score_summary(score_summary)
+    # print("ProbeGroup client risk:", [round(float(x), 3) for x in risk.tolist()])
+    # print("ProbeGroup individual risk:", [round(float(x), 3) for x in individual_risk.tolist()])
+    # print("ProbeGroup pair pressure:", [round(float(x), 3) for x in pair_pressure.tolist()])
+    # print("ProbeGroup persistent pair pressure:", [round(float(x), 3) for x in persistent_pair_pressure.tolist()])
+    # print("ProbeGroup final persistent risk:", [round(float(x), 3) for x in final_persistent_risk.tolist()])
+    # print("ProbeGroup boundary rescue:", boundary_rescue_info)
+    # print("ProbeGroup hard dropped clients:", hard_dropped_indices)
+    # print_probe_summary(telemetry_summary, group_records, suspicious_group_sets)
     print("ProbeGroup hard-drop guard:", hard_drop_guard)
-    print("ProbeGroup boundary rescue:", boundary_rescue_info)
-    print("ProbeGroup hard dropped clients:", hard_dropped_indices)
-    print_probe_summary(telemetry_summary, group_records, suspicious_group_sets)
+
 
     return w_avg
 
@@ -1690,7 +1692,7 @@ def write_probe_visual_diagnostics(
     except Exception as exc:
         print("ProbeGroup warning: could not write visual plots:", exc)
 
-    print("ProbeGroup visual diagnostics:", csv_path, json_path)
+    # print("ProbeGroup visual diagnostics:", csv_path, json_path)
 
 
 def write_probe_visual_plots(
@@ -2033,7 +2035,7 @@ PROBE_ROUND_SUMMARY_FIELDS = [
     "allow_memory", "allow_hard_drop", "allow_penalty", "candidate_groups", "memory_groups",
     "positive_group_count", "min_required_groups", "max_excess", "excess_threshold", "excess_margin",
     "attacker_mean_risk", "benign_mean_risk", "risk_gap", "attacker_persistent_mean",
-    "benign_persistent_mean", "persistent_gap", "hard_drop_local", "hard_drop_real",
+    "benign_persistent_mean", "persistent_gap","malicious_real_ids", "hard_drop_local", "hard_drop_real",
     "hard_drop_count", "hard_drop_precision", "hard_drop_recall", "hard_drop_margin",
     "top_group_score", "top_group_excess", "top_group_has_attacker", "top_client_real",
     "top_client_is_attacker", "hard_drop_action_allowed", "catastrophic_hard_drop_veto",
@@ -2077,6 +2079,7 @@ def cache_probe_round_summary_metrics(args, per_run, round_idx, group_records,
     evidence = attack_evidence or {}
     telemetry = telemetry_summary or {}
     attacker_set = set(int(x) for x in (idx_attacker or []))
+    malicious_real_ids = sorted(int(x) for x in (idx_attacker or []))
 
     allow_memory = bool(evidence.get("allow_memory_update", False))
     allow_hard = bool(evidence.get("hard_drop_action_allowed", evidence.get("allow_hard_drop", False)))
@@ -2137,6 +2140,7 @@ def cache_probe_round_summary_metrics(args, per_run, round_idx, group_records,
         "attacker_persistent_mean": attacker_persistent,
         "benign_persistent_mean": benign_persistent,
         "persistent_gap": attacker_persistent - benign_persistent,
+        "malicious_real_ids": json.dumps(malicious_real_ids),
         "hard_drop_local": json.dumps(dropped_local),
         "hard_drop_real": json.dumps(dropped_real),
         "hard_drop_count": len(dropped_local),
