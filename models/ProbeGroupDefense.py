@@ -756,7 +756,7 @@ def ProbeGroupDefense(
     # print("ProbeGroup persistent pair pressure:", [round(float(x), 3) for x in persistent_pair_pressure.tolist()])
     # print("ProbeGroup final persistent risk:", [round(float(x), 3) for x in final_persistent_risk.tolist()])
     # print("ProbeGroup boundary rescue:", boundary_rescue_info)
-    # print("ProbeGroup hard dropped clients:", hard_dropped_indices)
+    print("ProbeGroup hard dropped clients:", hard_dropped_indices)
     # print_probe_summary(telemetry_summary, group_records, suspicious_group_sets)
     print("ProbeGroup hard-drop guard:", hard_drop_guard)
 
