@@ -455,15 +455,27 @@ def ProbeGroupDefense(
     # intentionally drastic and should be ablated against soft-only behavior.
     hard_dropped_indices = []
     hard_drop_enabled = bool(getattr(args, "probe_hard_drop", True))
-    hard_drop_allowed = hard_drop_enabled and bool(attack_evidence.get("allow_hard_drop", False))
+
+    # The normal evidence gate determines which ranking strategy is used,
+    # but no longer determines whether a hard drop occurs.
+    evidence_allows_hard_drop = bool(
+        attack_evidence.get("allow_hard_drop", False)
+    )
+
     default_drop_k = int(getattr(args, "num_attacker", 0))
     drop_k = int(getattr(args, "probe_hard_drop_k", default_drop_k))
-    drop_k = max(0, min(drop_k, n_clients - 1 if n_clients > 1 else 0))
+    drop_k = max(
+        0,
+        min(drop_k, n_clients - 1 if n_clients > 1 else 0)
+    )
 
     positive_fraction = (
-        float(attack_evidence.get("positive_group_count", 0) or 0) / float(len(group_records))
-        if len(group_records) > 0 else 0.0
+        float(attack_evidence.get("positive_group_count", 0) or 0)
+        / float(len(group_records))
+        if len(group_records) > 0
+        else 0.0
     )
+
     hard_drop_guard = compute_catastrophic_hard_drop_guard(
         risk=risk,
         persistent_risk=final_persistent_risk,
@@ -471,10 +483,130 @@ def ProbeGroupDefense(
         drop_k=drop_k,
         args=args,
     )
-    catastrophic_guard_enabled = bool(getattr(args, "probe_catastrophic_guard", True))
-    catastrophic_veto = bool(catastrophic_guard_enabled and hard_drop_guard.get("veto", False))
-    if catastrophic_veto:
-        hard_drop_allowed = False
+
+    catastrophic_guard_enabled = bool(
+        getattr(args, "probe_catastrophic_guard", False)
+    )
+    catastrophic_veto = bool(
+        catastrophic_guard_enabled
+        and hard_drop_guard.get("veto", False)
+    )
+
+    # "Normal" hard-drop mode is used only when all existing conditions pass.
+    normal_hard_drop_conditions_met = bool(
+        hard_drop_enabled
+        and evidence_allows_hard_drop
+        and not catastrophic_veto
+    )
+
+    # Hard dropping itself now happens whenever it is enabled and drop_k > 0.
+    hard_drop_action_allowed = bool(
+        hard_drop_enabled
+        and drop_k > 0
+        and len(soft_weights) > 0
+    )
+
+    attack_evidence["hard_drop_action_allowed"] = hard_drop_action_allowed
+    attack_evidence["hard_drop_normal_conditions_met"] = (
+        normal_hard_drop_conditions_met
+    )
+    attack_evidence["catastrophic_hard_drop_veto"] = catastrophic_veto
+    attack_evidence["hard_drop_guard_reason"] = hard_drop_guard.get(
+        "reason", ""
+    )
+    attack_evidence["hard_drop_topk_overlap"] = hard_drop_guard.get(
+        "topk_overlap", 1.0
+    )
+    attack_evidence["hard_drop_rank_agreement"] = hard_drop_guard.get(
+        "rank_agreement", 1.0
+    )
+    attack_evidence["hard_drop_boundary_margin"] = hard_drop_guard.get(
+        "boundary_margin", 0.0
+    )
+    attack_evidence["hard_drop_boundary_margin_ratio"] = (
+        hard_drop_guard.get("boundary_margin_ratio", 0.0)
+    )
+
+    boundary_rescue_info = {
+        "applied": False,
+        "reason": "hard_drop_disabled",
+        "changed_count": 0,
+        "pool_size": 0,
+    }
+
+    hard_drop_selection_mode = "disabled"
+
+    if hard_drop_action_allowed:
+        if normal_hard_drop_conditions_met:
+            # Existing behavior when the evidence gate and guard pass:
+            # use the full persistent score with optional boundary rescue.
+            candidate_order, boundary_rescue_info = (
+                compute_boundary_rescue_order(
+                    final_persistent_risk=final_persistent_risk,
+                    persistent_individual_risk=persistent_individual_risk,
+                    individual_risk=individual_risk,
+                    drop_k=drop_k,
+                    hard_drop_guard=hard_drop_guard,
+                    positive_fraction=positive_fraction,
+                    args=args,
+                )
+            )
+            hard_drop_selection_mode = "normal_evidence_ranking"
+
+            # Preserve the existing minimum-risk condition in normal mode.
+            min_drop_risk = float(
+                getattr(args, "probe_hard_drop_min_risk", 0.0)
+            )
+
+            selected_indices = [
+                int(idx)
+                for idx in candidate_order
+                if float(final_persistent_risk[int(idx)]) >= min_drop_risk
+            ][:drop_k]
+
+            # Guarantee exactly drop_k removals even if the configured
+            # minimum-risk threshold removes too many candidates.
+            if len(selected_indices) < drop_k:
+                for idx in candidate_order:
+                    idx = int(idx)
+                    if idx not in selected_indices:
+                        selected_indices.append(idx)
+                    if len(selected_indices) >= drop_k:
+                        break
+
+        else:
+            # Fallback behavior:
+            # ignore current-round risk, group evidence, boundary rescue,
+            # and the minimum-risk threshold. Rank solely by the accumulated
+            # persistent score.
+            #
+            # persistent_individual_risk is the cross-round score produced by
+            # update_persistent_risk_table().
+            candidate_order = np.argsort(
+                persistent_individual_risk
+            )[::-1]
+
+            selected_indices = [
+                int(idx)
+                for idx in candidate_order[:drop_k]
+            ]
+
+            hard_drop_selection_mode = "persistent_score_only"
+            boundary_rescue_info = {
+                "applied": False,
+                "reason": "fallback_persistent_score_only",
+                "changed_count": 0,
+                "pool_size": 0,
+            }
+
+        for idx in selected_indices:
+            soft_weights[idx] = 0.0
+            hard_dropped_indices.append(idx)
+
+    attack_evidence["hard_drop_selection_mode"] = (
+        hard_drop_selection_mode
+    )
+    
 
     # Keep softer defenses active. This guard only prevents the most destructive
     # full-cohort rejection when attribution is diffuse or poorly separated.
@@ -512,11 +644,17 @@ def ProbeGroupDefense(
     attack_evidence["boundary_rescue_changed_count"] = int(boundary_rescue_info.get("changed_count", 0) or 0)
     attack_evidence["boundary_rescue_pool_size"] = int(boundary_rescue_info.get("pool_size", 0) or 0)
 
-    if not bool(attack_evidence.get("allow_penalty", False)) and bool(getattr(args, "probe_no_evidence_use_fedavg", True)):
-        # In no-evidence rounds, especially clean warmup, do not punish the
-        # weirdest benign clients. Use normal sample-size weights while still
-        # logging all candidate evidence for diagnosis.
+    #FedAvg weights are restored during no-evidence rounds, but mandatory hard drops are retained from persistent score.
+    if (
+        not bool(attack_evidence.get("allow_penalty", False))
+        and bool(getattr(args, "probe_no_evidence_use_fedavg", True))
+    ):
+    # Restore normal FedAvg weights during no-evidence rounds, but retain
+    # the mandatory hard drops selected from persistent score.
         soft_weights = np.array(base_weights, dtype=np.float64)
+
+    for idx in hard_dropped_indices:
+        soft_weights[int(idx)] = 0.0
 
     if soft_weights.sum() <= 0:
         soft_weights = np.array(base_weights, dtype=np.float64)
