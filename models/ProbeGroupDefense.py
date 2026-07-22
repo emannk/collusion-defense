@@ -603,64 +603,7 @@ def ProbeGroupDefense(
             soft_weights[idx] = 0.0
             hard_dropped_indices.append(idx)
 
-    attack_evidence["hard_drop_selection_mode"] = (
-        hard_drop_selection_mode
-    )
-    
-
-    # Record whether a hard-drop action will occur and whether the original
-    # evidence-based conditions were satisfied.
-    attack_evidence["hard_drop_action_allowed"] = bool(
-        hard_drop_action_allowed
-    )
-    attack_evidence["hard_drop_normal_conditions_met"] = bool(
-        normal_hard_drop_conditions_met
-    )
-    attack_evidence["catastrophic_hard_drop_veto"] = bool(
-        catastrophic_veto
-    )
-    attack_evidence["hard_drop_guard_reason"] = hard_drop_guard.get(
-        "reason", ""
-    )
-    attack_evidence["hard_drop_topk_overlap"] = hard_drop_guard.get(
-        "topk_overlap", 1.0
-    )
-    attack_evidence["hard_drop_rank_agreement"] = hard_drop_guard.get(
-        "rank_agreement", 1.0
-    )
-    attack_evidence["hard_drop_boundary_margin"] = hard_drop_guard.get(
-        "boundary_margin", 0.0
-    )
-    attack_evidence["hard_drop_boundary_margin_ratio"] = (
-        hard_drop_guard.get("boundary_margin_ratio", 0.0)
-    )
-
-    boundary_rescue_info = {
-        "applied": False,
-        "reason": "hard_drop_disabled",
-        "changed_count": 0,
-        "pool_size": 0,
-    }
-
-    hard_drop_selection_mode = "disabled"
-
-    if hard_drop_action_allowed and len(soft_weights) > 0:
-        min_drop_risk = float(getattr(args, "probe_hard_drop_min_risk", 0.0))
-        if drop_k > 0:
-            candidate_order, boundary_rescue_info = compute_boundary_rescue_order(
-                final_persistent_risk=final_persistent_risk,
-                persistent_individual_risk=persistent_individual_risk,
-                individual_risk=individual_risk,
-                drop_k=drop_k,
-                hard_drop_guard=hard_drop_guard,
-                positive_fraction=positive_fraction,
-                args=args,
-            )
-            for idx in candidate_order[:drop_k]:
-                if float(final_persistent_risk[int(idx)]) >= min_drop_risk:
-                    soft_weights[int(idx)] = 0.0
-                    hard_dropped_indices.append(int(idx))
-
+    attack_evidence["hard_drop_selection_mode"] = (hard_drop_selection_mode)
     attack_evidence["boundary_rescue_applied"] = bool(boundary_rescue_info.get("applied", False))
     attack_evidence["boundary_rescue_reason"] = boundary_rescue_info.get("reason", "")
     attack_evidence["boundary_rescue_changed_count"] = int(boundary_rescue_info.get("changed_count", 0) or 0)
