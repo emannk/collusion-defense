@@ -186,7 +186,7 @@ def args_parser():
                        help='number of clients to hard drop; omitted uses num_attacker')
     probe.add_argument('--probe_hard_drop_min_risk', type=float, default=0.0,
                        help='minimum persistent risk required for hard dropping')
-    add_bool_argument(probe, 'probe_catastrophic_guard', True,
+    add_bool_argument(probe, 'probe_catastrophic_guard', False,
                       'veto hard dropping when suspicious evidence is diffuse or poorly localized')
     probe.add_argument('--probe_catastrophic_broad_fraction', type=float, default=0.18,
                        help='positive-group fraction considered broadly distributed evidence')
