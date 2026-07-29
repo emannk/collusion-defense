@@ -43,7 +43,7 @@ def args_parser():
     parser.add_argument('--local_ep', type=int, default=5, help="the number of local epochs: E")
 
     # model arguments
-    parser.add_argument('--model', type=str, default='cnn', help='model name')
+    parser.add_argument('--model', type=str, default='cnn', choices=['cnn','mlp','resnet_mnist','lstm'], help='model name')
 
     # other arguments
     parser.add_argument('--dataset', type=str, default='mnist', help="name of dataset")

@@ -720,8 +720,9 @@ def get_persistent_risk_path(args, per_run):
     os.makedirs(out_dir, exist_ok=True)
     return os.path.join(
         out_dir,
-        "ProbeGroup_collusion_client_risk_{}_frac={}_nattacker={}_epsilon_{}_clip_{}_lr_{}_run_{}.json".format(
+        "ProbeGroup_collusion_client_risk_{}_model={}_frac={}_nattacker={}_epsilon_{}_clip_{}_lr_{}_run_{}.json".format(
             args.attack_type,
+            args.model,
             args.frac,
             args.num_attacker,
             str(args.dp_epsilon),
@@ -800,8 +801,9 @@ def get_persistent_pair_risk_path(args, per_run):
     os.makedirs(out_dir, exist_ok=True)
     return os.path.join(
         out_dir,
-        "ProbeGroup_collusion_pair_risk_{}_frac={}_nattacker={}_epsilon_{}_clip_{}_lr_{}_run_{}.json".format(
+        "ProbeGroup_collusion_pair_risk_{}_model={}_frac={}_nattacker={}_epsilon_{}_clip_{}_lr_{}_run_{}.json".format(
             args.attack_type,
+            args.model,
             args.frac,
             args.num_attacker,
             str(args.dp_epsilon),

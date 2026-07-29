@@ -19,7 +19,13 @@ from utils.sampling import (mnist_noniid_qty, mnist_noniid_dirichlet, cifar10_no
                             cifar100_iid, cifar100_noniid_qty, cifar100_noniid_dirichlet)
 from utils.options import args_parser
 from models.Update import LocalUpdateDP, LocalUpdateDPSerial, LocalUpdateNeuroMNIST, LocalUpdateNeuroMNISTSerial
-from models.Nets import CNNMnist, CNNCifar_ResNet18, FastTextBinary
+from models.Nets_MNIST import (
+    CNNMnist,
+    MLPMnist,
+    ResNetMnist,
+    CNNCifar_ResNet18,
+    FastTextBinary,
+)
 from models.Fed import FedWeightAvg, FedWeightAvg_noise, FedWeightAvg_random
 from models.test import test_img, test_bd, test_txt, test_bd_txt
 from opacus.grad_sample import GradSampleModule
@@ -390,31 +396,52 @@ if __name__ == '__main__':
             print(model_bd.__getitem__)
             print(model_bd_test.__getitem__)
 
-    elif args.model == 'cnn' and (args.dataset == 'mnist' or args.dataset == 'fashion-mnist'):
-        net_glob = CNNMnist(args=args).to(args.device)
+    elif (
+    args.model in ('cnn', 'mlp', 'resnet_mnist')
+    and (args.dataset == 'mnist' or args.dataset == 'fashion-mnist')
+    ):
+        if args.model == 'cnn':
+            net_glob = CNNMnist(args=args).to(args.device)
+        elif args.model == 'mlp':
+            net_glob = MLPMnist(args=args).to(args.device)
+        else:
+            net_glob = ResNetMnist(args=args).to(args.device)
         output_layer_name = get_output_layer_name(net_glob)
-        if args.attack:
-            if args.backdoor_baseline == 'DBA':
-                if args.dataset != 'mnist':
-                    exit('DBA baseline currently supports MNIST only.')
-                dba_trigger_pieces = get_mnist_dba_6piece_coords()
-                model_bd_test = DBAMNISTFullTriggerTestDataset(
-                    target_label=1,
-                    full_trigger_coords=get_mnist_full_trigger_coords(),
-                    exclude_target_label=False,
-                )
-            elif args.backdoor_baseline == 'Neurotoxin':
-                if args.dataset != 'mnist':
-                    exit('Neurotoxin baseline currently supports MNIST only.')
-                neuro_trigger = get_mnist_visible_trigger_coords()
-                model_bd_test = NeuroMNISTFullTriggerTestDataset(
-                    target_label=1,
-                    full_trigger_coords=neuro_trigger,
-                    exclude_target_label=True,
-                )
-            else:
-                model_bd = Mnist_bd(train=True, poison_ratio=args.PDR)
-                model_bd_test = Mnist_bd(train=False, poison_ratio=1.0)
+    
+    if args.attack:
+        if args.backdoor_baseline == 'DBA':
+            if args.dataset != 'mnist':
+                exit('DBA baseline currently supports MNIST only.')
+
+            dba_trigger_pieces = get_mnist_dba_6piece_coords()
+
+            model_bd_test = DBAMNISTFullTriggerTestDataset(
+                target_label=1,
+                full_trigger_coords=get_mnist_full_trigger_coords(),
+                exclude_target_label=False,
+            )
+
+        elif args.backdoor_baseline == 'Neurotoxin':
+            if args.dataset != 'mnist':
+                exit('Neurotoxin baseline currently supports MNIST only.')
+
+            neuro_trigger = get_mnist_visible_trigger_coords()
+
+            model_bd_test = NeuroMNISTFullTriggerTestDataset(
+                target_label=1,
+                full_trigger_coords=neuro_trigger,
+                exclude_target_label=True,
+            )
+
+        else:
+            model_bd = Mnist_bd(
+                train=True,
+                poison_ratio=args.PDR,
+            )
+            model_bd_test = Mnist_bd(
+                train=False,
+                poison_ratio=1.0,
+            )
     elif args.dataset == 'sent140' and args.model == 'lstm':
         net_glob = FastTextBinary(vocabSize).to(args.device)
     else:
@@ -493,7 +520,7 @@ if __name__ == '__main__':
         m, loop_index = max(int(args.frac * args.num_users), 1), int(1 / args.frac)
 
         first_call = True
-        directory_name = '{}/{}/DP-SGD_Attack_{}_Defense_{}_frac={}_nattacker={}_iid_{}_epsilon_{}_clip_{}_lr_{}_PDR_{}_local_ep_{}_CDP_{}_random_drop_{}/'.format(args.dataset, args.iid, args.attack_type, args.defense,
+        directory_name = '{}/{}/model{}/DP-SGD_Attack_{}_Defense_{}_frac={}_nattacker={}_iid_{}_epsilon_{}_clip_{}_lr_{}_PDR_{}_local_ep_{}_CDP_{}_random_drop_{}/'.format(args.dataset, args.iid, args.model, args.attack_type, args.defense,
                                                                         args.frac, args.num_attacker, str(args.iid), str(args.dp_epsilon), str(args.dp_clip), str(args.lr), str(args.PDR), str(args.local_ep),
                                                                                                                                                              str(args.central_noise), str(args.random_drop))
         print('directory_name: ', directory_name)
