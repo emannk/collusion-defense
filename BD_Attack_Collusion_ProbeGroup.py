@@ -408,40 +408,40 @@ if __name__ == '__main__':
             net_glob = ResNetMnist(args=args).to(args.device)
         output_layer_name = get_output_layer_name(net_glob)
     
-    if args.attack:
-        if args.backdoor_baseline == 'DBA':
-            if args.dataset != 'mnist':
-                exit('DBA baseline currently supports MNIST only.')
+        if args.attack:
+            if args.backdoor_baseline == 'DBA':
+                if args.dataset != 'mnist':
+                    exit('DBA baseline currently supports MNIST only.')
 
-            dba_trigger_pieces = get_mnist_dba_6piece_coords()
+                dba_trigger_pieces = get_mnist_dba_6piece_coords()
 
-            model_bd_test = DBAMNISTFullTriggerTestDataset(
-                target_label=1,
-                full_trigger_coords=get_mnist_full_trigger_coords(),
-                exclude_target_label=False,
-            )
+                model_bd_test = DBAMNISTFullTriggerTestDataset(
+                    target_label=1,
+                    full_trigger_coords=get_mnist_full_trigger_coords(),
+                    exclude_target_label=False,
+                )
 
-        elif args.backdoor_baseline == 'Neurotoxin':
-            if args.dataset != 'mnist':
-                exit('Neurotoxin baseline currently supports MNIST only.')
+            elif args.backdoor_baseline == 'Neurotoxin':
+                if args.dataset != 'mnist':
+                    exit('Neurotoxin baseline currently supports MNIST only.')
 
-            neuro_trigger = get_mnist_visible_trigger_coords()
+                neuro_trigger = get_mnist_visible_trigger_coords()
 
-            model_bd_test = NeuroMNISTFullTriggerTestDataset(
-                target_label=1,
-                full_trigger_coords=neuro_trigger,
-                exclude_target_label=True,
-            )
+                model_bd_test = NeuroMNISTFullTriggerTestDataset(
+                    target_label=1,
+                    full_trigger_coords=neuro_trigger,
+                    exclude_target_label=True,
+                )
 
-        else:
-            model_bd = Mnist_bd(
-                train=True,
-                poison_ratio=args.PDR,
-            )
-            model_bd_test = Mnist_bd(
-                train=False,
-                poison_ratio=1.0,
-            )
+            else:
+                model_bd = Mnist_bd(
+                    train=True,
+                    poison_ratio=args.PDR,
+                )
+                model_bd_test = Mnist_bd(
+                    train=False,
+                    poison_ratio=1.0,
+                )
     elif args.dataset == 'sent140' and args.model == 'lstm':
         net_glob = FastTextBinary(vocabSize).to(args.device)
     else:
