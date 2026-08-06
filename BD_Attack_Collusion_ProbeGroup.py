@@ -21,6 +21,7 @@ from utils.options import args_parser
 from models.Update import LocalUpdateDP, LocalUpdateDPSerial, LocalUpdateNeuroMNIST, LocalUpdateNeuroMNISTSerial
 from models.Nets_MNIST import (
     CNNMnist,
+    CNNMnistHighAccuracy,
     MLPMnist,
     ResNetMnist,
     CNNCifar_ResNet18,
@@ -223,7 +224,7 @@ if __name__ == '__main__':
     # parse args
     args = args_parser()
     args.device = torch.device('cuda:{}'.format(args.gpu) if torch.cuda.is_available() and args.gpu != -1 else 'cpu')
-    if args.backdoor_baseline in ('DBA', 'Neurotoxin') and (args.dataset != 'mnist' or args.model != 'cnn'):
+    if args.backdoor_baseline in ('DBA', 'Neurotoxin') and (args.dataset != 'mnist' or args.model not in ('cnn', 'cnn_highacc')):
         exit('{} baseline currently supports MNIST with CNN only.'.format(args.backdoor_baseline))
     RESULTS_ROOT = get_result_root(args.backdoor_baseline)
     dict_users = {}
@@ -397,11 +398,13 @@ if __name__ == '__main__':
             print(model_bd_test.__getitem__)
 
     elif (
-    args.model in ('cnn', 'mlp', 'resnet_mnist')
+    args.model in ('cnn', 'mlp', 'resnet_mnist', 'cnn_highacc')
     and (args.dataset == 'mnist' or args.dataset == 'fashion-mnist')
     ):
         if args.model == 'cnn':
             net_glob = CNNMnist(args=args).to(args.device)
+        elif args.model == 'cnn_highacc':
+            net_glob = CNNMnistHighAccuracy(args=args).to(args.device)
         elif args.model == 'mlp':
             net_glob = MLPMnist(args=args).to(args.device)
         else:
