@@ -19,7 +19,7 @@ from utils.sampling import (mnist_noniid_qty, mnist_noniid_dirichlet, cifar10_no
                             cifar100_iid, cifar100_noniid_qty, cifar100_noniid_dirichlet)
 from utils.options import args_parser
 from models.Update import LocalUpdateDP, LocalUpdateDPSerial, LocalUpdateNeuroMNIST, LocalUpdateNeuroMNISTSerial
-from models.Nets_MNIST import (
+from models.Nets import (
     CNNMnist,
     CNNMnistHighAccuracy,
     MLPMnist,

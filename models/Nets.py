@@ -87,6 +87,86 @@ class CNNMnist(nn.Module):
 
         return feature_list
 
+class CNNMnistHighAccuracy(nn.Module):
+    """Higher-capacity, Opacus-friendly CNN for MNIST/Fashion-MNIST.
+
+    The model keeps the final classifier name ``fc2`` so existing defenses such
+    as DeepSight can continue to locate the output layer without modification.
+    GroupNorm is used instead of BatchNorm because client batches can be small,
+    non-IID, or wrapped by Opacus for per-sample gradients.
+    """
+
+    def __init__(self, args):
+        super(CNNMnistHighAccuracy, self).__init__()
+        in_channels = int(args.num_channels)
+        num_classes = int(args.num_classes)
+
+        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, padding=1, bias=False)
+        self.gn1 = nn.GroupNorm(8, 32)
+        self.conv2 = nn.Conv2d(32, 32, kernel_size=3, padding=1, bias=False)
+        self.gn2 = nn.GroupNorm(8, 32)
+
+        self.conv3 = nn.Conv2d(32, 64, kernel_size=3, padding=1, bias=False)
+        self.gn3 = nn.GroupNorm(8, 64)
+        self.conv4 = nn.Conv2d(64, 64, kernel_size=3, padding=1, bias=False)
+        self.gn4 = nn.GroupNorm(8, 64)
+
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.feature_dropout = nn.Dropout2d(p=0.10)
+        self.fc1 = nn.Linear(64 * 7 * 7, 128)
+        self.classifier_dropout = nn.Dropout(p=0.20)
+        self.fc2 = nn.Linear(128, num_classes)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        for module in self.modules():
+            if isinstance(module, nn.Conv2d):
+                nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(module, nn.Linear):
+                nn.init.kaiming_uniform_(module.weight, a=5 ** 0.5)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.GroupNorm):
+                nn.init.ones_(module.weight)
+                nn.init.zeros_(module.bias)
+
+    def forward(self, x):
+        x = F.relu(self.gn1(self.conv1(x)), inplace=False)
+        x = F.relu(self.gn2(self.conv2(x)), inplace=False)
+        x = self.pool(x)
+        x = self.feature_dropout(x)
+
+        x = F.relu(self.gn3(self.conv3(x)), inplace=False)
+        x = F.relu(self.gn4(self.conv4(x)), inplace=False)
+        x = self.pool(x)
+        x = self.feature_dropout(x)
+
+        x = torch.flatten(x, 1)
+        x = F.relu(self.fc1(x), inplace=False)
+        x = self.classifier_dropout(x)
+        x = self.fc2(x)
+        return F.log_softmax(x, dim=1)
+
+    def get_feature_list(self, x):
+        feature_list = []
+
+        x = F.relu(self.gn1(self.conv1(x)), inplace=False)
+        x = F.relu(self.gn2(self.conv2(x)), inplace=False)
+        feature_list.append(x)
+        x = self.pool(x)
+        x = self.feature_dropout(x)
+
+        x = F.relu(self.gn3(self.conv3(x)), inplace=False)
+        x = F.relu(self.gn4(self.conv4(x)), inplace=False)
+        feature_list.append(x)
+        x = self.pool(x)
+        x = self.feature_dropout(x)
+
+        x = torch.flatten(x, 1)
+        x = F.relu(self.fc1(x), inplace=False)
+        feature_list.append(x)
+        return feature_list
 
 
 def convert_bn_to_gn(module, num_groups=32):
@@ -173,3 +253,138 @@ class FastTextBinary(nn.Module):
         pooled = summed / lengths               # masked mean
         out = self.fc(self.dropout(pooled)).squeeze(1)  # logits [B]
         return out
+
+class MLPMnist(nn.Module):
+    """Two-hidden-layer MLP for 28x28 MNIST/Fashion-MNIST images."""
+    def __init__(self, args):
+        super().__init__()
+        input_dim = int(args.num_channels) * 28 * 28
+        self.fc1 = nn.Linear(input_dim, 256)
+        self.fc2 = nn.Linear(256, 128)
+        self.dropout = nn.Dropout(p=0.3)
+        self.fc3 = nn.Linear(128, int(args.num_classes))
+
+    def forward(self, x):
+        x = torch.flatten(x, 1)
+        x = F.relu(self.fc1(x), inplace=False)
+        x = self.dropout(x)
+        x = F.relu(self.fc2(x), inplace=False)
+        x = self.dropout(x)
+        x = self.fc3(x)
+        return F.log_softmax(x, dim=1)
+
+    def get_feature_list(self, x):
+        features = []
+        x = torch.flatten(x, 1)
+        x = F.relu(self.fc1(x), inplace=False)
+        features.append(x)
+        x = self.dropout(x)
+        x = F.relu(self.fc2(x), inplace=False)
+        features.append(x)
+        return features
+
+
+class MNISTResidualBlock(nn.Module):
+    """Opacus-friendly residual block using GroupNorm and out-of-place ReLU."""
+    def __init__(self, in_channels, out_channels, stride=1):
+        super().__init__()
+        self.conv1 = nn.Conv2d(
+            in_channels, out_channels, kernel_size=3,
+            stride=stride, padding=1, bias=False
+        )
+        self.gn1 = self._group_norm(out_channels)
+        self.conv2 = nn.Conv2d(
+            out_channels, out_channels, kernel_size=3,
+            stride=1, padding=1, bias=False
+        )
+        self.gn2 = self._group_norm(out_channels)
+
+        if stride != 1 or in_channels != out_channels:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(
+                    in_channels, out_channels, kernel_size=1,
+                    stride=stride, bias=False
+                ),
+                self._group_norm(out_channels),
+            )
+        else:
+            self.shortcut = nn.Identity()
+
+    @staticmethod
+    def _group_norm(channels, preferred_groups=8):
+        groups = min(preferred_groups, channels)
+        while channels % groups != 0 and groups > 1:
+            groups -= 1
+        return nn.GroupNorm(groups, channels)
+
+    def forward(self, x):
+        identity = self.shortcut(x)
+        out = self.conv1(x)
+        out = self.gn1(out)
+        out = F.relu(out, inplace=False)
+        out = self.conv2(out)
+        out = self.gn2(out)
+        out = out + identity
+        return F.relu(out, inplace=False)
+
+
+class ResNetMnist(nn.Module):
+    """
+    Compact residual network for 28x28 one-channel images.
+
+    Widths: 32 -> 64 -> 128, with two residual blocks per stage.
+    It avoids BatchNorm and in-place activations for small federated batches
+    and Opacus GradSampleModule compatibility.
+    """
+    def __init__(self, args):
+        super().__init__()
+        in_channels = int(args.num_channels)
+        num_classes = int(args.num_classes)
+
+        self.stem_conv = nn.Conv2d(
+            in_channels, 32, kernel_size=3, stride=1, padding=1, bias=False
+        )
+        self.stem_gn = MNISTResidualBlock._group_norm(32)
+
+        self.layer1 = nn.Sequential(
+            MNISTResidualBlock(32, 32, stride=1),
+            MNISTResidualBlock(32, 32, stride=1),
+        )
+        self.layer2 = nn.Sequential(
+            MNISTResidualBlock(32, 64, stride=2),
+            MNISTResidualBlock(64, 64, stride=1),
+        )
+        self.layer3 = nn.Sequential(
+            MNISTResidualBlock(64, 128, stride=2),
+            MNISTResidualBlock(128, 128, stride=1),
+        )
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = nn.Linear(128, num_classes)
+
+    def forward(self, x):
+        x = self.stem_conv(x)
+        x = self.stem_gn(x)
+        x = F.relu(x, inplace=False)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        x = self.fc(x)
+        return F.log_softmax(x, dim=1)
+
+    def get_feature_list(self, x):
+        features = []
+        x = self.stem_conv(x)
+        x = self.stem_gn(x)
+        x = F.relu(x, inplace=False)
+        features.append(x)
+        x = self.layer1(x)
+        features.append(x)
+        x = self.layer2(x)
+        features.append(x)
+        x = self.layer3(x)
+        features.append(x)
+        x = self.avgpool(x)
+        features.append(torch.flatten(x, 1))
+        return features
