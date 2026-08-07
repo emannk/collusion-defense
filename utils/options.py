@@ -57,6 +57,8 @@ def args_parser():
                         choices=['standard', 'DBA', 'Neurotoxin'],
                         help='backdoor baseline: standard, DBA, or Neurotoxin')
     parser.add_argument('--num_attacker', type=int, default=1, help='number of attacker (default: 1)')
+    parser.add_argument('--attack_start_round', type=int, default=4,
+                        help='communication round when malicious clients begin attacking')    
     parser.add_argument('--dp_mechanism', type=str, default='Gaussian',
                         help='differential privacy mechanism')
     parser.add_argument('--dp_epsilon', type=float, default=20,

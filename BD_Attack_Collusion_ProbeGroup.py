@@ -545,7 +545,7 @@ if __name__ == '__main__':
             idx_benign = []
             idx_attacker = []
             if args.attack:
-                if iter < 4:
+                if iter < args.attack_start_round:
                     idx_benign = idxs_users[:]
                     idx_attacker = []
                 else:
@@ -573,7 +573,7 @@ if __name__ == '__main__':
                     import gc
                     gc.collect()
 
-                if iter >= 4:
+                if iter >= args.attack_start_round:
                     print("number of attacker:", args.num_attacker)
                     current_lr = 0
                     for slot, idx in enumerate(idx_attacker):
@@ -657,7 +657,7 @@ if __name__ == '__main__':
                         del w_attackers
                         del attack_updates_list
 
-                if iter >= 4 and args.attack_type in ('Collusion'):
+                if iter >= args.attack_start_round and args.attack_type in ('Collusion'):
                     w_locals_combine = w_locals[:-args.num_attacker] + attacker_state_dicts
                     w_updates_combine = w_updates[:-args.num_attacker] + attacker_state_updates
                 else:
