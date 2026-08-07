@@ -2,6 +2,7 @@
 data/cifar/
 data/mnist/
 data/sentiment-140/
+data/
 *.pyc
 *.pyo
 # Python bytecode
@@ -15,4 +16,7 @@ venv/
 
 data/sentiment-140/
 Results/
+save/data/
 save/
+logs/
+.DS_Store

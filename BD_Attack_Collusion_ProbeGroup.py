@@ -13,6 +13,14 @@ from torchvision import datasets, transforms
 import torch
 import os, sys, time, copy, random, signal, json, csv
 import math
+
+from utils.data_paths import (
+    MNIST_ROOT,
+    FASHION_MNIST_ROOT,
+    CIFAR10_ROOT,
+    CIFAR100_ROOT,
+)
+
 from utils.sampling import (mnist_noniid_qty, mnist_noniid_dirichlet, cifar10_noniid_qty, cifar10_noniid_prob,
                             mnist_noniid_prob, cifar10_noniid_dirichlet, fmnist_noniid_qty, fmnist_noniid_dirichlet,
                             fmnist_noniid_prob, sent140_dir, sent140_qty, sent140_prob,
@@ -223,6 +231,12 @@ if __name__ == '__main__':
     # parse args
     args = args_parser()
     args.device = torch.device('cuda:{}'.format(args.gpu) if torch.cuda.is_available() and args.gpu != -1 else 'cpu')
+
+    print("CUDA_VISIBLE_DEVICES:", os.environ.get("CUDA_VISIBLE_DEVICES"))
+    print("Selected device:", args.device)
+    if args.device.type == "cuda":
+    	print("GPU name:", torch.cuda.get_device_name(args.device))
+
     if args.backdoor_baseline in ('DBA', 'Neurotoxin') and (args.dataset != 'mnist' or args.model != 'cnn'):
         exit('{} baseline currently supports MNIST with CNN only.'.format(args.backdoor_baseline))
     RESULTS_ROOT = get_result_root(args.backdoor_baseline)
@@ -232,8 +246,8 @@ if __name__ == '__main__':
     # load dataset and split users
     if args.dataset == 'mnist':
         trans_mnist = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
-        dataset_train = datasets.MNIST('./data/mnist/', train=True, download=True, transform=trans_mnist)
-        dataset_test = datasets.MNIST('./data/mnist/', train=False, download=True, transform=trans_mnist)
+        dataset_train = datasets.MNIST(root=str(MNIST_ROOT),train=True,download=args.download_data,transform=trans_mnist,)
+        dataset_test = datasets.MNIST(root=str(MNIST_ROOT),train=False,download=args.download_data,transform=trans_mnist,)
         args.num_channels = 1
         # sample users
         if args.iid == 'qty':
@@ -253,13 +267,8 @@ if __name__ == '__main__':
             transforms.Normalize((0.4914, 0.4822, 0.4465),
                         (0.2470, 0.2435, 0.2616))
         ])
-        if args.attack:
-            dataset_train = datasets.CIFAR10('./data/cifar', train=True, download=True, transform=transform)
-            dataset_test = datasets.CIFAR10('./data/cifar', train=False, download=True, transform=transform)
-        else:
-            dataset_train = datasets.CIFAR10('./data/cifar', train=True, download=True, transform=transform)
-            dataset_test = datasets.CIFAR10('./data/cifar', train=False, download=True, transform=transform)
-
+        dataset_train = datasets.CIFAR10(root=str(CIFAR10_ROOT),train=True,download=args.download_data,transform=transform,)
+        dataset_test = datasets.CIFAR10(root=str(CIFAR10_ROOT),train=False,download=args.download_data,transform=transform,)
         if args.iid == 'qty':
             dict_users = cifar10_noniid_qty(dataset_train, args.num_users, int(args.thre_labels))
         elif args.iid == 'dir':
@@ -277,9 +286,8 @@ if __name__ == '__main__':
             transforms.Normalize((0.5071, 0.4867, 0.4408),
                         (0.2675, 0.2565, 0.2761))
         ])
-        dataset_train = datasets.CIFAR100('./data/cifar100', train=True, download=True, transform=transform)
-        dataset_test = datasets.CIFAR100('./data/cifar100', train=False, download=True, transform=transform)
-
+        dataset_train = datasets.CIFAR100(root=str(CIFAR100_ROOT),train=True,download=args.download_data,transform=transform,)
+        dataset_test = datasets.CIFAR100(root=str(CIFAR100_ROOT),train=False,download=args.download_data,transform=transform,)
         if args.iid == 'iid':
             dict_users = cifar100_iid(dataset_train, args.num_users)
         elif args.iid == 'qty':
@@ -295,10 +303,8 @@ if __name__ == '__main__':
     elif args.dataset == 'fashion-mnist':
         args.num_channels = 1
         trans_fashion_mnist = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))])
-        dataset_train = datasets.FashionMNIST('./data/fashion-mnist', train=True, download=True,
-                                              transform=trans_fashion_mnist)
-        dataset_test = datasets.FashionMNIST('./data/fashion-mnist', train=False, download=True,
-                                              transform=trans_fashion_mnist)
+        dataset_train = datasets.FashionMNIST(root=str(FASHION_MNIST_ROOT),train=True,download=args.download_data,transform=trans_fashion_mnist,)
+        dataset_test = datasets.FashionMNIST(root=str(FASHION_MNIST_ROOT),train=False,download=args.download_data,transform=trans_fashion_mnist,)
         #print(dataset_train.__getitem__)
         if args.iid == 'qty':
             dict_users = fmnist_noniid_qty(dataset_train, args.num_users, int(args.thre_labels))

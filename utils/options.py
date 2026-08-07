@@ -227,5 +227,11 @@ def args_parser():
     probe.add_argument('--probe_visual_top_groups', type=int, default=60,
                        help='maximum high-scoring groups written to visual diagnostics JSON')
 
+    #HPC arguments
+    parser.add_argument(
+    "--download_data",
+    action="store_true",
+    help="allow torchvision to download missing datasets; use only on an internet-enabled login node",)
+
     args = parser.parse_args()
     return args

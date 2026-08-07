@@ -4,16 +4,17 @@ from torch import nn
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, datasets
 from PIL import Image
+from utils.data_paths import MNIST_ROOT, CIFAR10_ROOT, CIFAR100_ROOT
 
 class Mnist_bd(Dataset):
-    def __init__(self, trans=True, train=True, poison_ratio=1):
+    def __init__(self,trans=True,train=True,poison_ratio=1,download=False,): 
         print('PDR: ', poison_ratio)
         self.train = train
         self.trans = trans
         trans_mnist = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
         self.transform = trans_mnist
         self.poison_ratio = poison_ratio
-        dataset = datasets.MNIST('../data/mnist/', train=self.train, download=True)
+        dataset = datasets.MNIST(root=str(MNIST_ROOT),train=self.train,download=download,)
         N = len(dataset)
         num_poison = int(self.poison_ratio * N)
         poison_indices = set(np.random.choice(N, num_poison, replace=False))
@@ -50,7 +51,7 @@ class Mnist_bd(Dataset):
 
 
 class Cifar_bd(Dataset):
-    def __init__(self, trans=True, train=True, poison_ratio=1):
+    def __init__(self,trans=True,train=True,poison_ratio=1,download=False,):
         print('PDR: ', poison_ratio)
         self.train = train
         self.trans = trans
@@ -62,7 +63,7 @@ class Cifar_bd(Dataset):
                                  (0.2470, 0.2435, 0.2616))
         ])
         self.transform = transform
-        dataset = datasets.CIFAR10('./data/cifar', train=self.train, download=True)
+        dataset = datasets.CIFAR10(root=str(CIFAR10_ROOT),train=self.train,download=download,)
         N = len(dataset)
         num_poison = int(self.poison_ratio * N)
         poison_indices = set(np.random.choice(N, num_poison, replace=False))
@@ -101,7 +102,7 @@ class Cifar_bd(Dataset):
 
 
 class Cifar100_bd(Dataset):
-    def __init__(self, trans=True, train=True, poison_ratio=1):
+    def __init__(self,trans=True,train=True,poison_ratio=1,download=False,):
         print('PDR: ', poison_ratio)
         self.train = train
         self.trans = trans
@@ -111,7 +112,7 @@ class Cifar100_bd(Dataset):
             transforms.Normalize((0.5071, 0.4867, 0.4408),
                                  (0.2675, 0.2565, 0.2761))
         ])
-        dataset = datasets.CIFAR100('./data/cifar100', train=self.train, download=True)
+        dataset = datasets.CIFAR100(root=str(CIFAR100_ROOT),train=self.train,download=download,)
         N = len(dataset)
         num_poison = int(self.poison_ratio * N)
         poison_indices = set(np.random.choice(N, num_poison, replace=False))
@@ -193,12 +194,12 @@ def get_mnist_visible_trigger_coords():
 
 
 class _MutableMNISTTriggerDataset(Dataset):
-    def __init__(self, train=True, target_label=1, trans=True):
+    def __init__(self,train=True,target_label=1,trans=True,download=False,):
         self.train = train
         self.target_label = target_label
         self.trans = trans
         self.transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
-        self.dataset = datasets.MNIST('./data/mnist/', train=self.train, download=True)
+        self.dataset = datasets.MNIST(root=str(MNIST_ROOT),train=self.train,download=download,)
         self.poison_indices = set()
         self.trigger_coords = []
 
@@ -232,13 +233,13 @@ class MutableNeuroMNISTTrainDataset(_MutableMNISTTriggerDataset):
 
 
 class _MNISTFullTriggerTestDataset(Dataset):
-    def __init__(self, target_label=1, full_trigger_coords=None, exclude_target_label=False, trans=True):
+    def __init__(self, target_label=1, full_trigger_coords=None, exclude_target_label=False, trans=True, download=False):
         self.target_label = target_label
         self.full_trigger_coords = list(full_trigger_coords or [])
         self.exclude_target_label = exclude_target_label
         self.trans = trans
         self.transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
-        base = datasets.MNIST('./data/mnist/', train=False, download=True)
+        base = datasets.MNIST(root=str(MNIST_ROOT),train=False,download=download,)
         self.data = []
         self.targets = []
         for img, lbl in base:
