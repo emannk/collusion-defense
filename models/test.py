@@ -95,6 +95,284 @@ def test_txt(net_g, datatest, args, threshold=0.5, pos_weight=None):
 
 from torch.utils.data import DataLoader, Dataset
 
+def evaluate_classification(net_g, datatest, args, threshold=0.5):
+    """
+    Detailed clean evaluation.
+
+    Returns enough raw information for:
+      - clean accuracy
+      - balanced accuracy
+      - macro-F1
+      - per-class recall/precision/F1
+      - confusion matrix
+      - source/minority/worst-class analysis later
+
+    Supports:
+      - binary models with [B] or [B, 1] logits
+      - multi-class models with [B, C] logits
+    """
+
+    net_g.eval()
+
+    device = (
+        args.device
+        if torch.cuda.is_available()
+        and getattr(args, "gpu", -1) != -1
+        else torch.device("cpu")
+    )
+
+    batch_size = int(getattr(args, "bs", 256))
+
+    loader = DataLoader(
+        datatest,
+        batch_size=batch_size,
+        shuffle=False,
+    )
+
+    num_classes = int(getattr(args, "num_classes", 2))
+
+    confusion = np.zeros(
+        (num_classes, num_classes),
+        dtype=np.int64,
+    )
+
+    total = 0
+    correct = 0
+    running_loss = 0.0
+
+    bce = nn.BCEWithLogitsLoss()
+
+    with torch.no_grad():
+        for x, y in loader:
+            x = x.to(device)
+            y = y.to(device)
+
+            logits = net_g(x)
+
+            if isinstance(logits, (tuple, list)):
+                logits = logits[0]
+
+            # -----------------------------------
+            # Binary-output model
+            # -----------------------------------
+            if (
+                logits.dim() == 1
+                or (
+                    logits.dim() == 2
+                    and logits.size(1) == 1
+                )
+            ):
+                logits = logits.view(-1)
+                y_long = y.long().view(-1)
+                y_float = y.float().view(-1)
+
+                loss = bce(
+                    logits,
+                    y_float,
+                )
+
+                probs = torch.sigmoid(logits)
+
+                preds = (
+                    probs >= threshold
+                ).long()
+
+            # -----------------------------------
+            # Multi-class model
+            # -----------------------------------
+            else:
+                y_long = y.long().view(-1)
+
+                loss = F.cross_entropy(
+                    logits,
+                    y_long,
+                    reduction="mean",
+                )
+
+                preds = logits.argmax(dim=1)
+
+            running_loss += (
+                loss.item() * x.size(0)
+            )
+
+            correct += (
+                preds.view(-1) == y_long
+            ).sum().item()
+
+            total += x.size(0)
+
+            # Build confusion matrix:
+            # row = true class
+            # col = predicted class
+            true_cpu = (
+                y_long.detach()
+                .cpu()
+                .numpy()
+            )
+
+            pred_cpu = (
+                preds.detach()
+                .cpu()
+                .numpy()
+            )
+
+            for true_label, pred_label in zip(
+                true_cpu,
+                pred_cpu,
+            ):
+                true_label = int(true_label)
+                pred_label = int(pred_label)
+
+                if (
+                    0 <= true_label < num_classes
+                    and 0 <= pred_label < num_classes
+                ):
+                    confusion[
+                        true_label,
+                        pred_label
+                    ] += 1
+
+    avg_loss = (
+        running_loss / max(total, 1)
+    )
+
+    accuracy = (
+        100.0 * correct / max(total, 1)
+    )
+
+    per_class = {}
+
+    recalls = []
+    f1_scores = []
+
+    for class_idx in range(num_classes):
+
+        tp = int(
+            confusion[
+                class_idx,
+                class_idx
+            ]
+        )
+
+        support = int(
+            confusion[class_idx, :].sum()
+        )
+
+        predicted_count = int(
+            confusion[:, class_idx].sum()
+        )
+
+        fn = support - tp
+        fp = predicted_count - tp
+
+        recall = (
+            tp / float(support)
+            if support > 0
+            else 0.0
+        )
+
+        precision = (
+            tp / float(predicted_count)
+            if predicted_count > 0
+            else 0.0
+        )
+
+        if precision + recall > 0:
+            f1 = (
+                2.0
+                * precision
+                * recall
+                / (precision + recall)
+            )
+        else:
+            f1 = 0.0
+
+        per_class[str(class_idx)] = {
+            "support": support,
+            "true_positive": tp,
+            "false_positive": int(fp),
+            "false_negative": int(fn),
+
+            # Percentage values for easier reading.
+            "recall": float(
+                100.0 * recall
+            ),
+
+            "precision": float(
+                100.0 * precision
+            ),
+
+            "f1": float(
+                100.0 * f1
+            ),
+        }
+
+        # Do not include classes absent from this
+        # evaluation set in macro averages.
+        if support > 0:
+            recalls.append(recall)
+            f1_scores.append(f1)
+
+    balanced_accuracy = (
+        100.0 * float(np.mean(recalls))
+        if recalls
+        else 0.0
+    )
+
+    macro_f1 = (
+        100.0 * float(np.mean(f1_scores))
+        if f1_scores
+        else 0.0
+    )
+
+    # Lowest-performing represented class.
+    represented_classes = [
+        class_idx
+        for class_idx in range(num_classes)
+        if per_class[str(class_idx)]["support"] > 0
+    ]
+
+    if represented_classes:
+        worst_class = min(
+            represented_classes,
+            key=lambda c:
+                per_class[str(c)]["recall"]
+        )
+
+        worst_class_accuracy = float(
+            per_class[str(worst_class)][
+                "recall"
+            ]
+        )
+    else:
+        worst_class = None
+        worst_class_accuracy = None
+
+    return {
+        "accuracy": float(accuracy),
+        "loss": float(avg_loss),
+
+        "balanced_accuracy":
+            float(balanced_accuracy),
+
+        "macro_f1":
+            float(macro_f1),
+
+        "per_class": per_class,
+
+        "confusion_matrix":
+            confusion.tolist(),
+
+        "worst_class":
+            worst_class,
+
+        "worst_class_accuracy":
+            worst_class_accuracy,
+
+        "num_samples":
+            int(total),
+    }
+
 def test_bd_txt(net_g, bX, bY, args, threshold=0.5, bs=None, pos_weight=None):
     """
     Backdoor evaluation:

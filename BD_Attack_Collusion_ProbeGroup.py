@@ -28,7 +28,7 @@ from models.Nets import (
     FastTextBinary,
 )
 from models.Fed import FedWeightAvg, FedWeightAvg_noise, FedWeightAvg_random
-from models.test import test_img, test_bd, test_txt, test_bd_txt
+from models.test import test_img, test_bd, test_txt, test_bd_txt, evaluate_classification
 from opacus.grad_sample import GradSampleModule
 from models.MnistBackdoor import (Mnist_bd, Cifar_bd, Cifar100_bd,
                                   MutableDBAMNISTTrainDataset, DBAMNISTFullTriggerTestDataset,
@@ -616,6 +616,7 @@ if __name__ == '__main__':
                 "clients_per_round": int(m),
                 "participation_blocks": int(loop_index),
                 "results_root": str(RESULTS_ROOT),
+                "num_classes": int(args.num_classes),
             },
         }
 
@@ -866,25 +867,22 @@ if __name__ == '__main__':
             # -------------------------------------------------
             net_glob.eval()
 
-            if args.dataset == 'sent140':
-                acc_t, loss_t = test_txt(
-                    net_glob,
-                    dataset_test,
-                    args
-                )
+            clean_test_metrics = evaluate_classification(
+                net_g=net_glob,
+                datatest=dataset_test,
+                args=args
+            )
 
+            acc_t = clean_test_metrics["accuracy"]
+            loss_t = clean_test_metrics["loss"]
+
+            if args.dataset == 'sent140':
                 acc_train, loss_train = test_txt(
                     net_glob,
                     dataset_train,
                     args
                 )
             else:
-                acc_t, loss_t = test_img(
-                    net_glob,
-                    dataset_test,
-                    args
-                )
-
                 acc_train, loss_train = test_img(
                     net_glob,
                     dataset_train,
@@ -963,22 +961,43 @@ if __name__ == '__main__':
 
                 "evaluation": {
                     "clean_accuracy":
-                        to_float(acc_t),
+                        float(clean_test_metrics["accuracy"]),
+
+                    "balanced_accuracy":
+                        float(clean_test_metrics["balanced_accuracy"]),
+
+                    "macro_f1":
+                        float(clean_test_metrics["macro_f1"]),
+
+                    "test_loss":
+                        float(clean_test_metrics["loss"]),
+
+                    "per_class":
+                        clean_test_metrics["per_class"],
+
+                    "confusion_matrix":
+                        clean_test_metrics["confusion_matrix"],
+
+                    "num_clean_test_samples":
+                        int(clean_test_metrics["num_samples"]),
+
+                    "worst_class":
+                        clean_test_metrics["worst_class"],
+
+                    "worst_class_accuracy":
+                        clean_test_metrics["worst_class_accuracy"], 
 
                     "train_accuracy":
                         to_float(acc_train),
+
+                    "train_loss":
+                        to_float(loss_train),
 
                     "asr": (
                         to_float(bd_acc_test)
                         if bd_acc_test is not None
                         else None
                     ),
-
-                    "test_loss":
-                        to_float(loss_t),
-
-                    "train_loss":
-                        to_float(loss_train),
                 },
 
                 "defense": defense_telemetry,

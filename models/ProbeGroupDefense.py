@@ -8,6 +8,9 @@ import torch.nn.functional as F
 import numpy as np
 from torch.utils.data import DataLoader
 
+_PERSISTENT_CLIENT_RISK_BY_RUN = {}
+_PERSISTENT_PAIR_RISK_BY_RUN = {}
+
 
 def compute_catastrophic_hard_drop_guard(risk, persistent_risk, positive_fraction, drop_k, args):
     """
@@ -340,10 +343,34 @@ def ProbeGroupDefense(
             # not feed persistent risk unless trigger_gap beats clean_gap.
             score = float(max(0.0, excess_trigger_gap))
 
+        real_group = local_to_real_group(
+            group,
+            users_idx,
+        )
+
+        known_attacker_count = (
+            count_known_attackers_in_group(
+                group=group,
+                users_idx=users_idx,
+                idx_attacker=idx_attacker,
+                n_clients=n_clients,
+                args=args,
+            )
+        )
+
+        known_attacker_fraction = (
+            float(known_attacker_count)
+            / float(len(group))
+            if len(group) > 0
+            else 0.0
+        )
+
         group_records.append({
             "group": list(group),
-            "real_group": local_to_real_group(group, users_idx),
-            "contains_known_attacker": group_contains_known_attacker(group, users_idx, idx_attacker, n_clients, args),
+            "real_group": real_group,
+            "contains_known_attacker": bool(known_attacker_count > 0),
+            "known_attacker_count": int(known_attacker_count),
+            "known_attacker_fraction": float(known_attacker_fraction),
             "score": score,
             "clean_gap": float(clean_gap),
             "trigger_gap": float(trigger_gap),
@@ -669,7 +696,7 @@ def ProbeGroupDefense(
     client_details = []
 
     for row in telemetry_summary.get("rows", []):
-        local_idx int(row["local_idx"])
+        local_idx = int(row["local_idx"])
         explanation = client_explanations.get(local_idx, {})
 
         client_item = dict(row)
@@ -677,7 +704,7 @@ def ProbeGroupDefense(
         client_item.update({
             "individual_risk": float(individual_risk[local_idx]),
             "persistent_individual_risk": float(persistent_individual_risk[local_idx]),
-            "final_persistant_risk": float(final_persistent_risk[local_idx]),
+            "final_persistent_risk": float(final_persistent_risk[local_idx]),
             "pair_pressure": float(pair_pressure[local_idx]),
             "persistent_pair_pressure": float(persistent_pair_pressure[local_idx]),
             "base_weight": float(base_weights[local_idx]),
@@ -810,11 +837,11 @@ def get_client_key(local_idx, users_idx):
 def update_persistent_risk_table(current_risk, users_idx, args, per_run, first_call, total_clients):
     run_key = int(per_run)
 
-    if first_call or run_key not in _PERSISTEN_CLIENT_RISK_BY_RUN:
+    if first_call or run_key not in _PERSISTENT_CLIENT_RISK_BY_RUN:
         _PERSISTENT_CLIENT_RISK_BY_RUN[run_key] = {}
     
 
-    table = _PERSISTEN_CLIENT_RISK_BY_RUN[run_key]
+    table = _PERSISTENT_CLIENT_RISK_BY_RUN[run_key]
 
     decay = float(getattr(args, "probe_risk_decay", 0.85))
     max_risk = float(getattr(args, "probe_max_risk", 2.0))
@@ -1007,6 +1034,57 @@ def group_contains_known_attacker(group, users_idx, idx_attacker, n_clients, arg
     attacker_start = n_clients - attacker_count
     return any(idx >= attacker_start for idx in group) if attacker_count > 0 else False
 
+def count_known_attackers_in_group(
+    group,
+    users_idx,
+    idx_attacker,
+    n_clients,
+    args,
+):
+    """
+    Return the number of known attackers inside a temporary ProbeGroup.
+
+    Prefer real/global client IDs when users_idx and idx_attacker are available.
+    Fall back to the runner's local ordering assumption otherwise.
+    """
+
+    # Preferred path: use real client IDs.
+    if users_idx is not None and idx_attacker is not None:
+        attacker_set = set(
+            int(x) for x in idx_attacker
+        )
+
+        real_group = local_to_real_group(
+            group,
+            users_idx,
+        )
+
+        return int(
+            sum(
+                1
+                for client_id in real_group
+                if client_id is not None
+                and int(client_id) in attacker_set
+            )
+        )
+
+    # Fallback for older callers where real IDs were not passed.
+    attacker_count = int(
+        getattr(args, "num_attacker", 0)
+    )
+
+    if attacker_count <= 0:
+        return 0
+
+    attacker_start = n_clients - attacker_count
+
+    return int(
+        sum(
+            1
+            for local_idx in group
+            if int(local_idx) >= attacker_start
+        )
+    )
 
 def build_client_telemetry_summary(risk, flags, appearances, users_idx, idx_attacker, total_clients, args, persistent_risk=None):
     rows = []
@@ -1693,7 +1771,7 @@ def build_probe_round_summary_metrics(args, per_run, round_idx, group_records,
     confidence_tier = 3 if allow_hard else 2 if allow_memory else 1 if allow_penalty else 0
 
     positive_count = int(evidence.get("positive_group_count", 0) or 0)
-    total_groups = i=nt(len(group_records or []))
+    total_groups = int(len(group_records or []))
     max_excess = float(evidence.get("max_excess", 0.0) or 0.0)
     threshold = float(evidence.get("excess_threshold", 0.0) or 0.0)
 
