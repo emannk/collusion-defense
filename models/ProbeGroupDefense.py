@@ -213,7 +213,10 @@ def ProbeGroupDefense(
     """
     n_clients = len(w_updates)
     if n_clients == 0:
-        return global_model.state_dict()
+        return global_model.state_dict(), {
+            "name": "ProbeGroup",
+            "empty_round": True,
+        }
 
     device = getattr(args, "device", next(global_model.parameters()).device)
     central_state = global_model.state_dict()
@@ -641,7 +644,7 @@ def ProbeGroupDefense(
     final_update = blend_updates(defended_update, full_update, alpha=blend_alpha)
     w_avg = add_update_to_state(central_state, final_update)
 
-    cache_probe_round_summary_metrics(
+    probe_summary = build_probe_round_summary_metrics(
         args=args,
         per_run=per_run,
         round_idx=int(getattr(args, "current_round", 0)),
@@ -653,58 +656,147 @@ def ProbeGroupDefense(
         hard_dropped_indices=hard_dropped_indices,
         users_idx=users_idx,
         idx_attacker=idx_attacker,
-        final_persistent_risk=final_persistent_risk,
+        final_persistent_risk=final_persistent_risk
     )
 
-    if debug:
-        log_probe_group_defense(
-            group_records=group_records,
-            suspicious_group_sets=suspicious_group_sets,
-            appearances=appearances,
-            flags=flags,
-            risk=risk,
-            weights=soft_weights,
-            args=args,
-            per_run=per_run,
-            first_call=first_call,
-            total_clients=n_clients,
-            full_clean_prob=full_clean_prob,
-            full_trigger_prob=full_trigger_prob,
-            target_class=target_class,
-            users_idx=users_idx,
-            idx_attacker=idx_attacker,
-            telemetry_summary=telemetry_summary,
-            persistent_risk_table=persistent_risk_table,
-            persistent_pair_table=persistent_pair_table,
-            pair_pressure=pair_pressure,
-            persistent_pair_pressure=persistent_pair_pressure,
-            final_persistent_risk=final_persistent_risk,
-            individual_risk=individual_risk,
-            strengths=strengths,
-            base_weights=base_weights,
-            hard_dropped_indices=hard_dropped_indices,
-            attack_evidence=attack_evidence,
-            candidate_suspicious_count=len(candidate_suspicious_groups),
-            score_summary=score_summary,
+    client_explanations = summarize_client_group_explanations(
+        group_records=group_records,
+        suspicious_group_sets=suspicious_group_sets,
+        strengths=strengths,
+        total_clients=n_clients,
+    )
+
+    client_details = []
+
+    for row in telemetry_summary.get("rows", []):
+        local_idx int(row["local_idx"])
+        explanation = client_explanations.get(local_idx, {})
+
+        client_item = dict(row)
+
+        client_item.update({
+            "individual_risk": float(individual_risk[local_idx]),
+            "persistent_individual_risk": float(persistent_individual_risk[local_idx]),
+            "final_persistant_risk": float(final_persistent_risk[local_idx]),
+            "pair_pressure": float(pair_pressure[local_idx]),
+            "persistent_pair_pressure": float(persistent_pair_pressure[local_idx]),
+            "base_weight": float(base_weights[local_idx]),
+            "final_weight": float(soft_weights[local_idx]),
+            "hard_dropped": bool( local_idx in hard_dropped_indices),
+        })
+
+        for key, value in explanation.items():
+            client_item[key] = float(value)
+
+        client_details.append(client_item)
+
+    group_details = []
+
+    for record in group_records:
+        group_key = tuple(record["group"])
+
+        item = dict(record)
+
+        item["candidate_suspicious"] = bool(
+            group_key in candidate_suspicious_group_sets
         )
 
-    
-    # print("ProbeGroup candidate suspicious groups: {}/{}".format(len(candidate_suspicious_groups), len(group_records)))
-    # print("ProbeGroup memory-updated suspicious groups: {}/{}".format(len(suspicious_groups), len(group_records)))
-    # print("ProbeGroup attack evidence:", compact_attack_evidence(attack_evidence))
-    # print_probe_score_summary(score_summary)
-    # print("ProbeGroup client risk:", [round(float(x), 3) for x in risk.tolist()])
-    # print("ProbeGroup individual risk:", [round(float(x), 3) for x in individual_risk.tolist()])
-    # print("ProbeGroup pair pressure:", [round(float(x), 3) for x in pair_pressure.tolist()])
-    # print("ProbeGroup persistent pair pressure:", [round(float(x), 3) for x in persistent_pair_pressure.tolist()])
-    # print("ProbeGroup final persistent risk:", [round(float(x), 3) for x in final_persistent_risk.tolist()])
-    # print("ProbeGroup boundary rescue:", boundary_rescue_info)
-    print("ProbeGroup hard dropped clients:", hard_dropped_indices)
-    # print_probe_summary(telemetry_summary, group_records, suspicious_group_sets)
-    print("ProbeGroup hard-drop guard:", hard_drop_guard)
+        item["memory_suspicious"] = bool(
+            group_key in suspicious_group_sets
+        )
 
+        item["strength"] = float(
+            strengths.get(group_key, 0.0)
+        )
 
-    return w_avg
+        group_details.append(item)
+
+    probe_telemetry = {
+        "name": "ProbeGroup",
+
+        "summary": probe_summary,
+
+        "probe_reference": {
+            "target_class": int(target_class),
+            "full_clean_prob": float(full_clean_prob),
+            "full_trigger_prob": float(full_trigger_prob),
+        },
+
+        "sampling": {
+            "group_seed": int(group_seed),
+            "group_size": int(group_size),
+            "requested_num_groups": int(num_groups),
+            "actual_num_groups": int(len(groups)),
+        },
+
+        "attack_evidence": attack_evidence,
+        "score_summary": score_summary,
+
+        "hard_drop_guard": hard_drop_guard,
+        "boundary_rescue": boundary_rescue_info,
+
+        "hard_dropped_local_indices": [
+            int(x) for x in hard_dropped_indices
+        ],
+
+        "users_idx_real_client_order": (
+            [int(x) for x in users_idx]
+            if users_idx is not None
+            else None
+        ),
+
+        "attacker_real_client_ids": (
+            [int(x) for x in idx_attacker]
+            if idx_attacker is not None
+            else []
+        ),
+
+        "current_risk": risk.tolist(),
+        "individual_risk": individual_risk.tolist(),
+
+        "persistent_individual_risk_current_clients":
+            persistent_individual_risk.tolist(),
+
+        "final_persistent_risk_current_clients":
+            final_persistent_risk.tolist(),
+
+        "persistent_client_risk_table": {
+            str(k): float(v)
+            for k, v in persistent_risk_table.items()
+        },
+
+        "pair_current": {
+            str(k): float(v)
+            for k, v in pair_current.items()
+        },
+
+        "pair_pressure": pair_pressure.tolist(),
+
+        "persistent_pair_pressure":
+            persistent_pair_pressure.tolist(),
+
+        "persistent_pair_risk_table": {
+            str(k): float(v)
+            for k, v in persistent_pair_table.items()
+        },
+
+        "base_weights": [
+            float(x) for x in base_weights
+        ],
+
+        "final_weights": [
+            float(x) for x in soft_weights
+        ],
+
+        "clients": client_details,
+        "groups": group_details,
+    }
+    print(
+        "ProbeGroup hard dropped clients:",
+        hard_dropped_indices
+    )
+
+    return w_avg, probe_telemetry
 
 
 
@@ -714,49 +806,15 @@ def get_client_key(local_idx, users_idx):
     return "local_{}".format(int(local_idx))
 
 
-def get_persistent_risk_path(args, per_run):
-    save_root = getattr(args, "save", "save")
-    out_dir = os.path.join(".", save_root, str(args.dataset), str(args.iid))
-    os.makedirs(out_dir, exist_ok=True)
-    return os.path.join(
-        out_dir,
-        "ProbeGroup_collusion_client_risk_{}_model={}_frac={}_nattacker={}_epsilon_{}_clip_{}_lr_{}_run_{}.json".format(
-            args.attack_type,
-            args.model,
-            args.frac,
-            args.num_attacker,
-            str(args.dp_epsilon),
-            str(args.dp_clip),
-            str(args.lr),
-            per_run,
-        ),
-    )
-
-
-def load_persistent_risk_table(args, per_run, first_call):
-    path = get_persistent_risk_path(args, per_run)
-    if first_call:
-        try:
-            if os.path.exists(path):
-                os.remove(path)
-                print("ProbeGroup removed stale persistent risk table:", path)
-        except Exception as exc:
-            print("ProbeGroup warning: could not remove stale persistent risk table:", exc)
-        return {}, path
-    if not os.path.exists(path):
-        return {}, path
-    try:
-        with open(path, "r") as f:
-            table = json.load(f)
-        if not isinstance(table, dict):
-            return {}, path
-        return {str(k): float(v) for k, v in table.items()}, path
-    except Exception:
-        return {}, path
-
 
 def update_persistent_risk_table(current_risk, users_idx, args, per_run, first_call, total_clients):
-    table, path = load_persistent_risk_table(args, per_run, first_call)
+    run_key = int(per_run)
+
+    if first_call or run_key not in _PERSISTEN_CLIENT_RISK_BY_RUN:
+        _PERSISTENT_CLIENT_RISK_BY_RUN[run_key] = {}
+    
+
+    table = _PERSISTEN_CLIENT_RISK_BY_RUN[run_key]
 
     decay = float(getattr(args, "probe_risk_decay", 0.85))
     max_risk = float(getattr(args, "probe_max_risk", 2.0))
@@ -765,10 +823,12 @@ def update_persistent_risk_table(current_risk, users_idx, args, per_run, first_c
     # fade if a client stops appearing in suspicious groups.
     for key in list(table.keys()):
         table[key] = max(0.0, min(max_risk, float(table[key]) * decay))
+
         if table[key] < 1e-8:
             table.pop(key, None)
 
     persistent_risk = np.zeros(total_clients, dtype=np.float64)
+
     for local_idx in range(total_clients):
         key = get_client_key(local_idx, users_idx)
         old_value = float(table.get(key, 0.0))
@@ -776,13 +836,7 @@ def update_persistent_risk_table(current_risk, users_idx, args, per_run, first_c
         table[key] = new_value
         persistent_risk[local_idx] = new_value
 
-    try:
-        with open(path, "w") as f:
-            json.dump(table, f, indent=2, sort_keys=True)
-    except Exception as exc:
-        print("ProbeGroup warning: could not save persistent risk table:", exc)
-
-    return table, persistent_risk
+    return dict(table), persistent_risk
 
 
 def get_pair_key(i, j, users_idx):
@@ -795,49 +849,14 @@ def get_pair_key(i, j, users_idx):
     return "{}:{}".format(a, b)
 
 
-def get_persistent_pair_risk_path(args, per_run):
-    save_root = getattr(args, "save", "save")
-    out_dir = os.path.join(".", save_root, str(args.dataset), str(args.iid))
-    os.makedirs(out_dir, exist_ok=True)
-    return os.path.join(
-        out_dir,
-        "ProbeGroup_collusion_pair_risk_{}_model={}_frac={}_nattacker={}_epsilon_{}_clip_{}_lr_{}_run_{}.json".format(
-            args.attack_type,
-            args.model,
-            args.frac,
-            args.num_attacker,
-            str(args.dp_epsilon),
-            str(args.dp_clip),
-            str(args.lr),
-            per_run,
-        ),
-    )
-
-
-def load_persistent_pair_risk_table(args, per_run, first_call):
-    path = get_persistent_pair_risk_path(args, per_run)
-    if first_call:
-        try:
-            if os.path.exists(path):
-                os.remove(path)
-                print("ProbeGroup removed stale persistent pair risk table:", path)
-        except Exception as exc:
-            print("ProbeGroup warning: could not remove stale persistent pair risk table:", exc)
-        return {}, path
-    if not os.path.exists(path):
-        return {}, path
-    try:
-        with open(path, "r") as f:
-            table = json.load(f)
-        if not isinstance(table, dict):
-            return {}, path
-        return {str(k): float(v) for k, v in table.items()}, path
-    except Exception:
-        return {}, path
-
-
 def update_persistent_pair_risk_table(pair_current, users_idx, args, per_run, first_call, total_clients):
-    table, path = load_persistent_pair_risk_table(args, per_run, first_call)
+    run_key = int(per_run)
+
+    if first_call or run_key not in _PERSISTENT_PAIR_RISK_BY_RUN:
+        _PERSISTENT_PAIR_RISK_BY_RUN[run_key] = {}
+
+    table = _PERSISTENT_PAIR_RISK_BY_RUN[run_key]
+
     decay = float(getattr(args, "probe_pair_decay", 0.92))
     max_pair_risk = float(getattr(args, "probe_pair_max_risk", 3.0))
 
@@ -850,19 +869,13 @@ def update_persistent_pair_risk_table(pair_current, users_idx, args, per_run, fi
         old_value = float(table.get(key, 0.0))
         table[key] = max(0.0, min(max_pair_risk, old_value + float(value)))
 
-    try:
-        with open(path, "w") as f:
-            json.dump(table, f, indent=2, sort_keys=True)
-    except Exception as exc:
-        print("ProbeGroup warning: could not save persistent pair risk table:", exc)
-
     persistent_pair_pressure = pair_table_to_client_pressure(
         pair_table=table,
         users_idx=users_idx,
         total_clients=total_clients,
         args=args,
     )
-    return table, persistent_pair_pressure
+    return dict(table), persistent_pair_pressure
 
 
 def compute_group_strengths(group_records, suspicious_group_sets):
@@ -1244,14 +1257,17 @@ def l1_vector_distance(a, b):
 
 
 def deterministic_group_seed(args, users_idx, n_clients):
-    base = int(getattr(args, "seed", 1))
+    base = int(getattr(args, "run_seed", 1))
+    round_idx = int(getattr(args, "current_round", 0))
+
     if users_idx is None:
         user_part = n_clients * 9973
     else:
         user_part = 0
+
         for pos, uid in enumerate(users_idx):
             user_part += (pos + 1) * int(uid) * 131
-    return int(base + user_part + n_clients * 17)
+    return int(base * 1000003 + round_idx * 9176 + user_part + n_clients * 17)
 
 
 def sample_random_groups(n_clients, group_size, num_groups, seed=None):
@@ -1576,24 +1592,6 @@ def safe_float(value, default=0.0):
         return default
 
 
-def make_probe_visual_stem(args, per_run, first_call):
-    save_root = getattr(args, "save", "save")
-    out_dir = os.path.join(".", save_root, str(args.dataset), str(args.iid), "ProbeGroup_visuals")
-    os.makedirs(out_dir, exist_ok=True)
-    return os.path.join(
-        out_dir,
-        "ProbeGroup_round_{}_{}_frac={}_nattacker={}_epsilon_{}_clip_{}_lr_{}".format(
-            per_run,
-            "first" if first_call else "next",
-            args.frac,
-            args.num_attacker,
-            str(args.dp_epsilon),
-            str(args.dp_clip),
-            str(args.lr),
-        ),
-    )
-
-
 def summarize_client_group_explanations(group_records, suspicious_group_sets, strengths, total_clients):
     if strengths is None:
         strengths = {}
@@ -1659,495 +1657,11 @@ def summarize_client_group_explanations(group_records, suspicious_group_sets, st
         m["avg_suspicious_trigger_vec_gap"] = m["suspicious_trigger_vec_gap_sum"] / sus_count
     return metrics
 
-
-def write_probe_visual_diagnostics(
-    group_records,
-    suspicious_group_sets,
-    strengths,
-    appearances,
-    flags,
-    risk,
-    weights,
-    args,
-    per_run,
-    first_call,
-    total_clients,
-    users_idx=None,
-    idx_attacker=None,
-    telemetry_summary=None,
-    persistent_pair_table=None,
-    pair_pressure=None,
-    persistent_pair_pressure=None,
-    final_persistent_risk=None,
-    individual_risk=None,
-    base_weights=None,
-    hard_dropped_indices=None,
-    attack_evidence=None,
-    candidate_suspicious_count=None,
-    score_summary=None,
-):
-    if not bool(getattr(args, "probe_write_visuals", True)):
-        return
-
-    stem = make_probe_visual_stem(args, per_run, first_call)
-    explanation = summarize_client_group_explanations(
-        group_records=group_records,
-        suspicious_group_sets=suspicious_group_sets,
-        strengths=strengths,
-        total_clients=total_clients,
-    )
-
-    if telemetry_summary is not None:
-        rows = telemetry_summary.get("rows", [])
-    else:
-        rows = []
-        attacker_set = set(int(x) for x in idx_attacker) if idx_attacker is not None else set()
-        attacker_count = int(getattr(args, "num_attacker", 0))
-        fallback_attacker_start = total_clients - attacker_count
-        for local_idx in range(total_clients):
-            real_id = int(users_idx[local_idx]) if users_idx is not None and local_idx < len(users_idx) else None
-            is_attacker = (real_id in attacker_set) if users_idx is not None and idx_attacker is not None else (attacker_count > 0 and local_idx >= fallback_attacker_start)
-            rows.append({"local_idx": local_idx, "real_client_id": real_id, "is_known_attacker": bool(is_attacker)})
-
-    csv_path = stem + "_clients.csv"
-    fieldnames = [
-        "local_idx", "real_client_id", "is_known_attacker",
-        "risk", "individual_risk", "persistent_risk", "pair_pressure", "persistent_pair_pressure",
-        "base_weight", "final_weight", "flags", "appearances",
-        "all_group_count", "suspicious_group_count", "suspicious_strength_sum",
-        "avg_all_score", "avg_suspicious_score", "avg_suspicious_clean_gap",
-        "avg_suspicious_trigger_gap", "avg_suspicious_excess", "avg_suspicious_shift_gap",
-        "avg_suspicious_direction_gap", "avg_suspicious_clean_vec_gap", "avg_suspicious_trigger_vec_gap",
-        "attacker_group_count", "benign_only_suspicious_group_count",
-    ]
-    with open(csv_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            local_idx = int(row["local_idx"])
-            m = explanation.get(local_idx, {})
-            writer.writerow({
-                "local_idx": local_idx,
-                "real_client_id": row.get("real_client_id"),
-                "is_known_attacker": int(bool(row.get("is_known_attacker", False))),
-                "risk": safe_float(risk[local_idx]) if risk is not None and local_idx < len(risk) else 0.0,
-                "individual_risk": safe_float(individual_risk[local_idx]) if individual_risk is not None and local_idx < len(individual_risk) else "",
-                "persistent_risk": safe_float(final_persistent_risk[local_idx]) if final_persistent_risk is not None and local_idx < len(final_persistent_risk) else safe_float(row.get("persistent_risk")),
-                "pair_pressure": safe_float(pair_pressure[local_idx]) if pair_pressure is not None and local_idx < len(pair_pressure) else "",
-                "persistent_pair_pressure": safe_float(persistent_pair_pressure[local_idx]) if persistent_pair_pressure is not None and local_idx < len(persistent_pair_pressure) else "",
-                "base_weight": safe_float(base_weights[local_idx]) if base_weights is not None and local_idx < len(base_weights) else "",
-                "final_weight": safe_float(weights[local_idx]) if weights is not None and local_idx < len(weights) else "",
-                "flags": safe_float(flags[local_idx]) if flags is not None and local_idx < len(flags) else 0.0,
-                "appearances": safe_float(appearances[local_idx]) if appearances is not None and local_idx < len(appearances) else 0.0,
-                "all_group_count": safe_float(m.get("all_group_count")),
-                "suspicious_group_count": safe_float(m.get("suspicious_group_count")),
-                "suspicious_strength_sum": safe_float(m.get("suspicious_strength_sum")),
-                "avg_all_score": safe_float(m.get("avg_all_score")),
-                "avg_suspicious_score": safe_float(m.get("avg_suspicious_score")),
-                "avg_suspicious_clean_gap": safe_float(m.get("avg_suspicious_clean_gap")),
-                "avg_suspicious_trigger_gap": safe_float(m.get("avg_suspicious_trigger_gap")),
-                "avg_suspicious_excess": safe_float(m.get("avg_suspicious_excess")),
-                "avg_suspicious_shift_gap": safe_float(m.get("avg_suspicious_shift_gap")),
-                "avg_suspicious_direction_gap": safe_float(m.get("avg_suspicious_direction_gap")),
-                "avg_suspicious_clean_vec_gap": safe_float(m.get("avg_suspicious_clean_vec_gap")),
-                "avg_suspicious_trigger_vec_gap": safe_float(m.get("avg_suspicious_trigger_vec_gap")),
-                "attacker_group_count": safe_float(m.get("attacker_group_count")),
-                "benign_only_suspicious_group_count": safe_float(m.get("benign_only_suspicious_group_count")),
-            })
-
-    sorted_groups = sorted(group_records, key=lambda r: safe_float(r.get("score")), reverse=True)
-    top_groups = []
-    for record in sorted_groups[:int(getattr(args, "probe_visual_top_groups", 60))]:
-        group_key = tuple(record.get("group", []))
-        item = {}
-        for key, value in record.items():
-            if isinstance(value, (np.floating, np.integer)):
-                item[key] = float(value)
-            else:
-                item[key] = value
-        item["suspicious"] = bool(group_key in suspicious_group_sets)
-        item["strength"] = safe_float(strengths.get(group_key, 0.0) if strengths else 0.0)
-        top_groups.append(item)
-
-    json_path = stem + "_top_groups.json"
-    with open(json_path, "w") as f:
-        json.dump({
-            "score_summary": score_summary or {},
-            "users_idx": [int(x) for x in users_idx] if users_idx is not None else None,
-            "idx_attacker": [int(x) for x in idx_attacker] if idx_attacker is not None else None,
-            "client_csv": os.path.basename(csv_path),
-            "top_groups": top_groups,
-        }, f, indent=2, sort_keys=True)
-
-    try:
-        write_probe_visual_plots(
-            stem=stem,
-            group_records=group_records,
-            suspicious_group_sets=suspicious_group_sets,
-            persistent_pair_table=persistent_pair_table,
-            users_idx=users_idx,
-            idx_attacker=idx_attacker,
-            total_clients=total_clients,
-            client_rows=rows,
-            final_persistent_risk=final_persistent_risk,
-            pair_pressure=pair_pressure,
-            persistent_pair_pressure=persistent_pair_pressure,
-            explanation=explanation,
-        )
-    except Exception as exc:
-        print("ProbeGroup warning: could not write visual plots:", exc)
-
-    # print("ProbeGroup visual diagnostics:", csv_path, json_path)
-
-
-def write_probe_visual_plots(
-    stem,
-    group_records,
-    suspicious_group_sets,
-    persistent_pair_table,
-    users_idx,
-    idx_attacker,
-    total_clients,
-    client_rows,
-    final_persistent_risk,
-    pair_pressure,
-    persistent_pair_pressure,
-    explanation,
-):
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    attacker_real_ids = set(int(x) for x in idx_attacker) if idx_attacker is not None else set()
-    labels = []
-    is_attacker_by_local = []
-    for local_idx in range(total_clients):
-        real_id = int(users_idx[local_idx]) if users_idx is not None and local_idx < len(users_idx) else local_idx
-        is_attacker = real_id in attacker_real_ids if users_idx is not None and idx_attacker is not None else False
-        labels.append(("*" if is_attacker else "") + str(real_id))
-        is_attacker_by_local.append(bool(is_attacker))
-
-    # Plot 1: clean gap vs trigger gap, with suspicious groups visually separated.
-    plt.figure(figsize=(8, 6))
-    benign_x, benign_y = [], []
-    attack_x, attack_y = [], []
-    sus_benign_x, sus_benign_y = [], []
-    sus_attack_x, sus_attack_y = [], []
-    for record in group_records:
-        x = safe_float(record.get("clean_gap"))
-        y = safe_float(record.get("trigger_gap"))
-        is_suspicious = tuple(record.get("group", [])) in suspicious_group_sets
-        contains_attacker = bool(record.get("contains_known_attacker", False))
-        if is_suspicious and contains_attacker:
-            sus_attack_x.append(x); sus_attack_y.append(y)
-        elif is_suspicious:
-            sus_benign_x.append(x); sus_benign_y.append(y)
-        elif contains_attacker:
-            attack_x.append(x); attack_y.append(y)
-        else:
-            benign_x.append(x); benign_y.append(y)
-    if benign_x:
-        plt.scatter(benign_x, benign_y, marker=".", label="benign groups")
-    if attack_x:
-        plt.scatter(attack_x, attack_y, marker="x", label="attacker-containing groups")
-    if sus_benign_x:
-        plt.scatter(sus_benign_x, sus_benign_y, marker="o", label="suspicious benign-only")
-    if sus_attack_x:
-        plt.scatter(sus_attack_x, sus_attack_y, marker="^", label="suspicious attacker-containing")
-    plt.xlabel("clean_gap")
-    plt.ylabel("trigger_gap")
-    plt.title("ProbeGroup clean-vs-trigger group behavior")
-    plt.legend(fontsize=8)
-    plt.tight_layout()
-    plt.savefig(stem + "_clean_vs_trigger_scatter.png", dpi=160)
-    plt.close()
-
-    # Plot 2: persistent pair-risk heatmap.
-    matrix = np.zeros((total_clients, total_clients), dtype=np.float64)
-    if persistent_pair_table:
-        real_to_local = {}
-        if users_idx is not None:
-            for local_idx, real_id in enumerate(users_idx):
-                real_to_local[int(real_id)] = int(local_idx)
-        for key, value in persistent_pair_table.items():
-            try:
-                a_str, b_str = str(key).split(":", 1)
-                a, b = int(a_str), int(b_str)
-            except Exception:
-                continue
-            if users_idx is not None:
-                if a not in real_to_local or b not in real_to_local:
-                    continue
-                i, j = real_to_local[a], real_to_local[b]
-            else:
-                i, j = a, b
-                if i < 0 or j < 0 or i >= total_clients or j >= total_clients:
-                    continue
-            matrix[i, j] = max(matrix[i, j], safe_float(value))
-            matrix[j, i] = max(matrix[j, i], safe_float(value))
-    plt.figure(figsize=(max(7, min(13, total_clients * 0.35)), max(6, min(12, total_clients * 0.35))))
-    plt.imshow(matrix, aspect="auto")
-    plt.colorbar(label="persistent pair risk")
-    plt.title("ProbeGroup persistent pair-risk heatmap (* = known attacker)")
-    if total_clients <= 40:
-        plt.xticks(range(total_clients), labels, rotation=90, fontsize=7)
-        plt.yticks(range(total_clients), labels, fontsize=7)
-    else:
-        plt.xticks([])
-        plt.yticks([])
-    plt.tight_layout()
-    plt.savefig(stem + "_pair_risk_heatmap.png", dpi=160)
-    plt.close()
-
-    # Plot 3: client risk breakdown, sorted by final persistent risk.
-    risk_vals = []
-    pair_vals = []
-    persistent_pair_vals = []
-    excess_vals = []
-    names = []
-    for row in client_rows:
-        local_idx = int(row["local_idx"])
-        names.append(labels[local_idx])
-        risk_vals.append(safe_float(final_persistent_risk[local_idx]) if final_persistent_risk is not None and local_idx < len(final_persistent_risk) else safe_float(row.get("persistent_risk")))
-        pair_vals.append(safe_float(pair_pressure[local_idx]) if pair_pressure is not None and local_idx < len(pair_pressure) else 0.0)
-        persistent_pair_vals.append(safe_float(persistent_pair_pressure[local_idx]) if persistent_pair_pressure is not None and local_idx < len(persistent_pair_pressure) else 0.0)
-        excess_vals.append(safe_float(explanation.get(local_idx, {}).get("avg_suspicious_excess")))
-    order = np.argsort(np.array(risk_vals))[::-1][:min(20, total_clients)]
-    x = np.arange(len(order))
-    plt.figure(figsize=(max(9, len(order) * 0.45), 6))
-    plt.bar(x - 0.25, [risk_vals[i] for i in order], width=0.25, label="final persistent risk")
-    plt.bar(x, [persistent_pair_vals[i] for i in order], width=0.25, label="persistent pair pressure")
-    plt.bar(x + 0.25, [excess_vals[i] for i in order], width=0.25, label="avg suspicious excess")
-    plt.xticks(x, [names[i] for i in order], rotation=90, fontsize=8)
-    plt.ylabel("value")
-    plt.title("Top client diagnostic breakdown (* = known attacker)")
-    plt.legend(fontsize=8)
-    plt.tight_layout()
-    plt.savefig(stem + "_client_breakdown.png", dpi=160)
-    plt.close()
-
-def log_probe_group_defense(
-    group_records,
-    suspicious_group_sets,
-    appearances,
-    flags,
-    risk,
-    weights,
-    args,
-    per_run,
-    first_call,
-    total_clients,
-    full_clean_prob,
-    full_trigger_prob,
-    target_class,
-    users_idx=None,
-    idx_attacker=None,
-    telemetry_summary=None,
-    persistent_risk_table=None,
-    persistent_pair_table=None,
-    pair_pressure=None,
-    persistent_pair_pressure=None,
-    final_persistent_risk=None,
-    individual_risk=None,
-    strengths=None,
-    base_weights=None,
-    score_summary=None,
-    attack_evidence=None,
-    hard_dropped_indices=None,
-    candidate_suspicious_count=None,
-    memory_suspicious_count=None,
-):
-    save_root = getattr(args, "save", "save")
-    out_dir = os.path.join(".", save_root, str(args.dataset), str(args.iid))
-    os.makedirs(out_dir, exist_ok=True)
-
-    filename = os.path.join(
-        out_dir,
-        "ProbeGroup_analysis_{}_frac={}_nattacker={}_epsilon_{}_clip_{}_lr_{}_round_{}.txt".format(
-            args.attack_type,
-            args.frac,
-            args.num_attacker,
-            str(args.dp_epsilon),
-            str(args.dp_clip),
-            str(args.lr),
-            per_run,
-        ),
-    )
-
-    # Use the same role mapping as console telemetry. The old fallback assumed
-    # attackers were the last num_attacker local clients; that is true in this
-    # repo's current runner, but using telemetry avoids stale indexing lies.
-    if telemetry_summary is not None:
-        attacker_rows = telemetry_summary.get("attacker_rows", [])
-        benign_rows = telemetry_summary.get("benign_rows", [])
-        attacker_locals = [int(r["local_idx"]) for r in attacker_rows]
-        benign_locals = [int(r["local_idx"]) for r in benign_rows]
-        malicious_avg_risk = mean_array_at_indices(risk, attacker_locals)
-        benign_avg_risk = mean_array_at_indices(risk, benign_locals)
-        malicious_avg_weight = mean_list_at_indices(weights, attacker_locals)
-        benign_avg_weight = mean_list_at_indices(weights, benign_locals)
-    else:
-        attacker_count = int(getattr(args, "num_attacker", 0))
-        attacker_start = total_clients - attacker_count
-        if attacker_count > 0:
-            malicious_avg_risk = float(np.mean(risk[attacker_start:]))
-            benign_avg_risk = float(np.mean(risk[:attacker_start])) if attacker_start > 0 else 0.0
-            malicious_avg_weight = float(np.mean(weights[attacker_start:]))
-            benign_avg_weight = float(np.mean(weights[:attacker_start])) if attacker_start > 0 else 0.0
-        else:
-            malicious_avg_risk = 0.0
-            benign_avg_risk = float(np.mean(risk))
-            malicious_avg_weight = 0.0
-            benign_avg_weight = float(np.mean(weights))
-
-    mode = "w" if first_call else "a"
-    with open(filename, mode) as f:
-        f.write("target_class: {}\n".format(target_class))
-        f.write("full_clean_prob: {:.6f}\n".format(float(full_clean_prob)))
-        f.write("full_trigger_prob: {:.6f}\n".format(float(full_trigger_prob)))
-        f.write("malicious_avg_risk: {:.6f}\n".format(malicious_avg_risk))
-        f.write("benign_avg_risk: {:.6f}\n".format(benign_avg_risk))
-        f.write("malicious_avg_weight: {:.6f}\n".format(malicious_avg_weight))
-        f.write("benign_avg_weight: {:.6f}\n".format(benign_avg_weight))
-        if persistent_risk_table is not None:
-            f.write("persistent_risk_table: {}\n".format({k: round(float(v), 6) for k, v in persistent_risk_table.items()}))
-        if persistent_pair_table is not None:
-            top_pairs = sorted(persistent_pair_table.items(), key=lambda kv: float(kv[1]), reverse=True)[:30]
-            f.write("persistent_pair_top30: {}\n".format([(k, round(float(v), 6)) for k, v in top_pairs]))
-        if pair_pressure is not None:
-            f.write("pair_pressure: {}\n".format([round(float(x), 6) for x in pair_pressure.tolist()]))
-        if persistent_pair_pressure is not None:
-            f.write("persistent_pair_pressure: {}\n".format([round(float(x), 6) for x in persistent_pair_pressure.tolist()]))
-        if final_persistent_risk is not None:
-            f.write("final_persistent_risk: {}\n".format([round(float(x), 6) for x in final_persistent_risk.tolist()]))
-        if score_summary is not None:
-            f.write("score_summary: {}\n".format({k: round(float(v), 6) if isinstance(v, float) else v for k, v in score_summary.items()}))
-        if attack_evidence is not None:
-            f.write("attack_evidence: {}\n".format(attack_evidence))
-        if candidate_suspicious_count is not None:
-            f.write("candidate_suspicious_count: {}\n".format(int(candidate_suspicious_count)))
-        if memory_suspicious_count is not None:
-            f.write("memory_suspicious_count: {}\n".format(int(memory_suspicious_count)))
-        if hard_dropped_indices is not None:
-            f.write("hard_dropped_indices: {}\n".format([int(x) for x in hard_dropped_indices]))
-        if candidate_suspicious_count is not None:
-            f.write("candidate_suspicious_count: {}\n".format(int(candidate_suspicious_count)))
-        f.write("client_risk: {}\n".format([round(float(x), 6) for x in risk.tolist()]))
-        f.write("client_flags: {}\n".format([int(x) for x in flags.tolist()]))
-        f.write("client_appearances: {}\n".format([int(x) for x in appearances.tolist()]))
-        f.write("client_weights: {}\n".format([round(float(x), 8) for x in weights]))
-        if hard_dropped_indices is not None:
-            f.write("hard_dropped_indices: {}\n".format([int(x) for x in hard_dropped_indices]))
-        if users_idx is not None:
-            f.write("users_idx_real_client_order: {}\n".format([int(x) for x in users_idx]))
-        if idx_attacker is not None:
-            f.write("idx_attacker_real_client_ids: {}\n".format([int(x) for x in idx_attacker]))
-        if telemetry_summary is not None:
-            f.write("attacker_mean_flags: {:.6f}\n".format(float(telemetry_summary["attacker_mean_flags"])))
-            f.write("benign_mean_flags: {:.6f}\n".format(float(telemetry_summary["benign_mean_flags"])))
-            f.write("attacker_mean_persistent_risk: {:.6f}\n".format(float(telemetry_summary["attacker_mean_persistent_risk"])))
-            f.write("benign_mean_persistent_risk: {:.6f}\n".format(float(telemetry_summary["benign_mean_persistent_risk"])))
-            f.write("client_rows:\n")
-            for row in telemetry_summary["rows"]:
-                f.write(
-                    "local={}, real={}, known_attacker={}, risk={:.6f}, persistent_risk={:.6f}, flags={}, appearances={}\n".format(
-                        row["local_idx"],
-                        row["real_client_id"],
-                        int(row["is_known_attacker"]),
-                        row["risk"],
-                        row["persistent_risk"],
-                        row["flags"],
-                        row["appearances"],
-                    )
-                )
-
-            top_clients = sorted(
-                telemetry_summary["rows"],
-                key=lambda r: (r["persistent_risk"], r["risk"], r["flags"], r["appearances"]),
-                reverse=True
-            )[:10]
-
-            f.write("top_suspicious_clients:\n")
-            for row in top_clients:
-                f.write(
-                    "local={}, real={}, known_attacker={}, risk={:.6f}, persistent_risk={:.6f}, flags={}, appearances={}\n".format(
-                        row["local_idx"],
-                        row["real_client_id"],
-                        int(row["is_known_attacker"]),
-                        row["risk"],
-                        row["persistent_risk"],
-                        row["flags"],
-                        row["appearances"],
-                    )
-                )
-        f.write("groups:\n")
-        for record in group_records:
-            is_suspicious = tuple(record["group"]) in suspicious_group_sets
-            f.write(
-                "suspicious={}, known_attacker_group={}, group={}, real_group={}, score={:.6f}, clean_gap={:.6f}, trigger_gap={:.6f}, excess={:.6f}, shift_gap={:.6f}, clean_vec_gap={:.6f}, trigger_vec_gap={:.6f}, excess_vec={:.6f}, shift_vec_gap={:.6f}, direction_gap={:.6f}\n".format(
-                    int(is_suspicious),
-                    int(bool(record.get("contains_known_attacker", False))),
-                    record["group"],
-                    record.get("real_group"),
-                    record["score"],
-                    record["clean_gap"],
-                    record["trigger_gap"],
-                    record["excess_trigger_gap"],
-                    record["shift_gap"],
-                    record.get("clean_vec_gap", 0.0),
-                    record.get("trigger_vec_gap", 0.0),
-                    record.get("excess_vec_gap", 0.0),
-                    record.get("shift_vec_gap", 0.0),
-                    record["direction_gap"],
-                )
-            )
-        f.write("--------Round--------\n")
-
-    write_probe_visual_diagnostics(
-        group_records=group_records,
-        suspicious_group_sets=suspicious_group_sets,
-        strengths=strengths,
-        appearances=appearances,
-        flags=flags,
-        risk=risk,
-        weights=weights,
-        args=args,
-        per_run=per_run,
-        first_call=first_call,
-        total_clients=total_clients,
-        users_idx=users_idx,
-        idx_attacker=idx_attacker,
-        telemetry_summary=telemetry_summary,
-        persistent_pair_table=persistent_pair_table,
-        pair_pressure=pair_pressure,
-        persistent_pair_pressure=persistent_pair_pressure,
-        final_persistent_risk=final_persistent_risk,
-        individual_risk=individual_risk,
-        base_weights=base_weights,
-        score_summary=score_summary,
-    )
-
 # -----------------------------------------------------------------------------
 # Per-round CSV telemetry shared with the collusion attack runner.
 # ProbeGroupDefense records detector-side values first; the runner later adds
 # model accuracy/loss values after evaluation and commits one complete CSV row.
 # -----------------------------------------------------------------------------
-_PROBE_ROUND_SUMMARY_CACHE = {}
-
-PROBE_ROUND_SUMMARY_FIELDS = [
-    "round", "asr", "clean_acc", "train_acc", "test_loss", "train_loss", "avg_train_loss",
-    "gate_reason", "confidence_tier", "positive_fraction", "unsup_gate_pass",
-    "allow_memory", "allow_hard_drop", "allow_penalty", "candidate_groups", "memory_groups",
-    "positive_group_count", "min_required_groups", "max_excess", "excess_threshold", "excess_margin",
-    "attacker_mean_risk", "benign_mean_risk", "risk_gap", "attacker_persistent_mean",
-    "benign_persistent_mean", "persistent_gap","malicious_real_ids", "hard_drop_local", "hard_drop_real",
-    "hard_drop_count", "hard_drop_precision", "hard_drop_recall", "hard_drop_margin",
-    "top_group_score", "top_group_excess", "top_group_has_attacker", "top_client_real",
-    "top_client_is_attacker", "hard_drop_action_allowed", "catastrophic_hard_drop_veto",
-    "hard_drop_guard_reason", "hard_drop_topk_overlap", "hard_drop_rank_agreement",
-    "hard_drop_boundary_margin_ratio", "boundary_rescue_applied",
-    "boundary_rescue_reason", "boundary_rescue_changed_count", "boundary_rescue_pool_size",
-]
 
 
 def _csv_scalar(value):
@@ -2162,25 +1676,12 @@ def _csv_scalar(value):
     return value
 
 
-def _probe_summary_path(args, per_run):
-    save_root = getattr(args, "save", "save")
-    out_dir = os.path.join(".", save_root, str(args.dataset), str(args.iid))
-    os.makedirs(out_dir, exist_ok=True)
-    return os.path.join(
-        out_dir,
-        "ProbeGroup_round_metrics_{}_frac={}_nattacker={}_epsilon_{}_clip_{}_lr_{}_run_{}.csv".format(
-            args.attack_type, args.frac, args.num_attacker, str(args.dp_epsilon),
-            str(args.dp_clip), str(args.lr), per_run,
-        ),
-    )
 
-
-def cache_probe_round_summary_metrics(args, per_run, round_idx, group_records,
+def build_probe_round_summary_metrics(args, per_run, round_idx, group_records,
                                       candidate_suspicious_groups, suspicious_groups,
                                       attack_evidence, telemetry_summary,
                                       hard_dropped_indices, users_idx, idx_attacker,
                                       final_persistent_risk):
-    key = (int(per_run), int(round_idx))
     evidence = attack_evidence or {}
     telemetry = telemetry_summary or {}
     attacker_set = set(int(x) for x in (idx_attacker or []))
@@ -2192,7 +1693,7 @@ def cache_probe_round_summary_metrics(args, per_run, round_idx, group_records,
     confidence_tier = 3 if allow_hard else 2 if allow_memory else 1 if allow_penalty else 0
 
     positive_count = int(evidence.get("positive_group_count", 0) or 0)
-    total_groups = int(len(group_records or []))
+    total_groups = i=nt(len(group_records or []))
     max_excess = float(evidence.get("max_excess", 0.0) or 0.0)
     threshold = float(evidence.get("excess_threshold", 0.0) or 0.0)
 
@@ -2223,7 +1724,7 @@ def cache_probe_round_summary_metrics(args, per_run, round_idx, group_records,
 
     top_group = max(group_records or [], key=lambda r: float(r.get("score", 0.0)), default={})
 
-    _PROBE_ROUND_SUMMARY_CACHE[key] = {
+    return  {
         "round": int(round_idx),
         "gate_reason": evidence.get("reason", ""),
         "confidence_tier": confidence_tier,
@@ -2245,9 +1746,9 @@ def cache_probe_round_summary_metrics(args, per_run, round_idx, group_records,
         "attacker_persistent_mean": attacker_persistent,
         "benign_persistent_mean": benign_persistent,
         "persistent_gap": attacker_persistent - benign_persistent,
-        "malicious_real_ids": json.dumps(malicious_real_ids),
-        "hard_drop_local": json.dumps(dropped_local),
-        "hard_drop_real": json.dumps(dropped_real),
+        "malicious_real_ids": malicious_real_ids,
+        "hard_drop_local": dropped_local,
+        "hard_drop_real": dropped_real,
         "hard_drop_count": len(dropped_local),
         "hard_drop_precision": precision,
         "hard_drop_recall": recall,
@@ -2268,27 +1769,3 @@ def cache_probe_round_summary_metrics(args, per_run, round_idx, group_records,
         "boundary_rescue_changed_count": int(evidence.get("boundary_rescue_changed_count", 0) or 0),
         "boundary_rescue_pool_size": int(evidence.get("boundary_rescue_pool_size", 0) or 0),
     }
-
-
-def update_probe_round_summary_metrics(args, per_run, round_idx, asr=None, clean_acc=None,
-                                       train_acc=None, test_loss=None, train_loss=None,
-                                       avg_train_loss=None):
-    key = (int(per_run), int(round_idx))
-    row = _PROBE_ROUND_SUMMARY_CACHE.pop(key, {"round": int(round_idx)})
-    row.update({
-        "asr": _csv_scalar(asr),
-        "clean_acc": _csv_scalar(clean_acc),
-        "train_acc": _csv_scalar(train_acc),
-        "test_loss": _csv_scalar(test_loss),
-        "train_loss": _csv_scalar(train_loss),
-        "avg_train_loss": _csv_scalar(avg_train_loss),
-    })
-    path = _probe_summary_path(args, per_run)
-    write_header = not os.path.exists(path) or os.path.getsize(path) == 0
-    with open(path, "a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=PROBE_ROUND_SUMMARY_FIELDS, extrasaction="ignore")
-        if write_header:
-            writer.writeheader()
-        writer.writerow({field: _csv_scalar(row.get(field, "")) for field in PROBE_ROUND_SUMMARY_FIELDS})
-    print("ProbeGroup round metrics CSV:", path)
-    return path

@@ -38,7 +38,7 @@ from models.MnistBackdoor import (Mnist_bd, Cifar_bd, Cifar100_bd,
 from models.DeepS import DeepSight
 
 # from models.newDefense import RiskScoreDefense
-from models.ProbeGroupDefense import ProbeGroupDefense, update_probe_round_summary_metrics
+from models.ProbeGroupDefense import ProbeGroupDefense
 
 from tensorflow_privacy.compute_noise_from_budget_lib import compute_noise
 from scipy.stats import norm
@@ -49,9 +49,88 @@ from models.Freqfed import FreqFed
 from models.Measa import Mesas
 import torch.nn as nn
 import pickle
+import shlex
 
 _PREFIX = "_module."
 RESULTS_ROOT = 'Results'
+
+def json_safe(value):
+    if value is None:
+        return None
+
+    if isinstance(value, torch.Tensor):
+        if value.numel() == 1:
+            return value.detach().cpu().item()
+        return value.detach().cpu().tolist()
+
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+
+    if isinstance(value, np.generic):
+        return value.item()
+
+    if isinstance(value, torch.device):
+        return str(value)
+
+    if isinstance(value, dict):
+        return {str(k): json_safe(v) for k, v in value.items()}
+
+    if isinstance(value, (list, tuple, set)):
+        return [json_safe(v) for v in value]
+
+    if isinstance(value, (str, int, float, bool)):
+        return value
+
+    return str(value)
+
+def get_run_output_path(run_id):
+    os.makedirs(RESULTS_ROOT, exist_ok=True)
+
+    return os.path.join(RESULTS_ROOT, "run_{}.jsonl".format(int(run_id)))
+
+def append_run_output(path, record):
+    with open(path, "a") as f:
+        f.write(
+            json.dumps(
+                json_safe(record),
+                sort_keys=False
+            )
+            + "\n"
+        )
+
+def create_run_output(path, run_config):
+    """
+    Create a new run file and write the run configuration as line 1.
+    Fail rather than overwrite an existing round_indicator file.
+    """
+    try:
+        with open(path, "x") as f:
+            f.write(
+                json.dumps(
+                    json_safe(run_config),
+                    sort_keys=False
+                )
+                + "\n"
+            )
+    except FileExistsError:
+        raise RuntimeError("Run output file already exists: {}\n"
+                           "Choose a unique --round_indicator".format(path)
+        )
+
+def set_random_seed(seed):
+    seed = int(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+
+    torch.manual_seed(seed)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
+    if hasattr(torch.backends, "cudnn"):
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 def get_result_root(backdoor_baseline):
     return {
@@ -68,26 +147,6 @@ def to_float(x):
     return float(x)  # plain int/float
 
 
-def write_round_accuracy_summary(directory_name, round_idx, asr=None, clean_acc=None, train_acc=None, clear=False):
-    out_dir = os.path.join(RESULTS_ROOT, directory_name)
-    os.makedirs(out_dir, exist_ok=True)
-    path = os.path.join(out_dir, "Round_accuracy_summary.csv")
-    if clear and os.path.exists(path):
-        try:
-            os.remove(path)
-        except Exception as exc:
-            print("Round accuracy summary warning: could not remove old file:", exc)
-    write_header = not os.path.exists(path) or os.path.getsize(path) == 0
-    with open(path, "a", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["round", "asr", "clean_acc", "train_acc"])
-        if write_header:
-            writer.writeheader()
-        writer.writerow({
-            "round": int(round_idx),
-            "asr": to_float(asr) if asr is not None else "",
-            "clean_acc": to_float(clean_acc) if clean_acc is not None else "",
-            "train_acc": to_float(train_acc) if train_acc is not None else "",
-        })
 
 def strip_prefix_dict(sd, prefix=_PREFIX):
     return { (k[len(prefix):] if k.startswith(prefix) else k): v for k, v in sd.items() }
@@ -120,13 +179,6 @@ def assert_no_inplace(model: nn.Module):
            if hasattr(m, "inplace") and getattr(m, "inplace", False)]
     assert not bad, f"Found inplace activations: {bad}"
 
-
-def write_to_file(num, fname, dname, clear=False):
-    file_path = os.path.join(RESULTS_ROOT, dname + fname + '.txt')
-    mode = "w" if clear else "a"
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
-    with open(file_path, mode) as file:
-        file.write(f"{num}\n")
 
 def get_update(update, model):
     '''get the update weight'''
@@ -223,6 +275,10 @@ def get_output_layer_name(glob_model):
 if __name__ == '__main__':
     # parse args
     args = args_parser()
+
+    # seed all RNGs before data loading and model initialization
+    set_random_seed(args.seed)
+
     args.device = torch.device('cuda:{}'.format(args.gpu) if torch.cuda.is_available() and args.gpu != -1 else 'cpu')
     if args.backdoor_baseline in ('DBA', 'Neurotoxin') and (args.dataset != 'mnist' or args.model not in ('cnn', 'cnn_highacc')):
         exit('{} baseline currently supports MNIST with CNN only.'.format(args.backdoor_baseline))
@@ -453,7 +509,21 @@ if __name__ == '__main__':
 
     total_run = args.total_run
     round_indicator = args.round_indicator
+
+    base_seed = int(args.seed)
+
     for per_run in range(round_indicator, round_indicator+total_run):
+        run_seed = base_seed + int(per_run)
+        set_random_seed(run_seed)
+
+        # Store it so ProbeGroupDefense can use it to seed its random selection of probe clients
+        args.run_seed = run_seed
+
+        print("Experiment run {} with seed {}".format(per_run, run_seed))
+
+        run_id = int(per_run)
+        
+
         net_glob = copy.deepcopy(net_glob_clean).to(args.device)
         replace_inplace_activations(net_glob)
         assert_no_inplace(net_glob)
@@ -523,14 +593,40 @@ if __name__ == '__main__':
         m, loop_index = max(int(args.frac * args.num_users), 1), int(1 / args.frac)
 
         first_call = True
-        directory_name = '{}/{}/model{}/DP-SGD_Attack_{}_Defense_{}_frac={}_nattacker={}_iid_{}_epsilon_{}_clip_{}_lr_{}_PDR_{}_local_ep_{}_CDP_{}_random_drop_{}/'.format(args.dataset, args.iid, args.model, args.attack_type, args.defense,
-                                                                        args.frac, args.num_attacker, str(args.iid), str(args.dp_epsilon), str(args.dp_clip), str(args.lr), str(args.PDR), str(args.local_ep),
-                                                                                                                                                             str(args.central_noise), str(args.random_drop))
-        print('directory_name: ', directory_name)
 
         start_iter = 0
 
         m, loop_index = max(int(args.frac * args.num_users), 1), int(1 / args.frac)
+
+        command = " ".join(shlex.quote(str(x)) for x in [sys.executable] + sys.argv)
+
+        run_config = {
+            "record_type": "run_config",
+            "round_indicator": run_id,
+
+            "command": command,
+
+            "arguments": vars(args).copy(),
+
+            "derived_parameters": {
+                "run_seed": int(
+                    getattr(args, "run_seed", args.seed)
+                ),
+                "device": str(args.device),
+                "clients_per_round": int(m),
+                "participation_blocks": int(loop_index),
+                "results_root": str(RESULTS_ROOT),
+            },
+        }
+
+        run_output_path = get_run_output_path(run_id)
+
+        create_run_output(
+            path = run_output_path,
+            run_config = run_config
+        )
+
+        print("Run output file:", run_output_path)
 
         for iter in range(start_iter, args.epochs):
 
@@ -584,7 +680,7 @@ if __name__ == '__main__':
                             poison_indices = sample_shard_poison_indices(
                                 dict_users[idx],
                                 args.PDR,
-                                int(args.seed + iter * args.num_users + idx),
+                                int(args.run_seed + iter * args.num_users + idx),
                             )
                             attacker_datasets[idx].set_poison_spec(
                                 poison_indices,
@@ -594,7 +690,7 @@ if __name__ == '__main__':
                             poison_indices = sample_shard_poison_indices(
                                 dict_users[idx],
                                 args.PDR,
-                                int(args.seed + iter * args.num_users + idx),
+                                int(args.run_seed + iter * args.num_users + idx),
                             )
                             attacker_datasets[idx].set_poison_spec(poison_indices, neuro_trigger)
                         local = clients_attacker[idx]
@@ -687,6 +783,11 @@ if __name__ == '__main__':
             users_idx = idx_benign + idx_attacker
             print('all users: ', users_idx)
             print('length of each client: ', length_locals)
+
+            # Preserve the actual number of samples contributed by each
+            # participating client before aggregation reqeighting changes it.
+            client_sample_counts = list(length_locals)
+
             if args.re_weight:
                 length_locals = length_locals
             else:
@@ -711,7 +812,7 @@ if __name__ == '__main__':
                                  first_call=first_call, w_length=length_locals, debug=True)
                 
             elif args.defense == 'ProbeGroup':
-                w_glob = ProbeGroupDefense(
+                w_glob, defense_telemetry = ProbeGroupDefense(
                     w_list=w_locals_combine,
                     w_updates=w_updates_combine,
                     global_model=copy.deepcopy(net_glob),
@@ -722,7 +823,7 @@ if __name__ == '__main__':
                     w_length=length_locals,
                     users_idx=users_idx,
                     idx_attacker=idx_attacker,
-                    debug=True,
+                    debug=False,
                 )
 
             # elif args.defense == 'RiskScore':
@@ -753,52 +854,161 @@ if __name__ == '__main__':
             torch.cuda.empty_cache()
             import gc
             gc.collect()
-            if args.attack:
-                bd_loss /= args.num_attacker
-                write_to_file(bd_loss, "bd_loss_{}".format(per_run), directory_name, clear=first_call)
-            loss_avg = sum(loss_locals) / len(loss_locals)
-            write_to_file(loss_avg, "main_loss_{}".format(per_run), directory_name, clear=first_call)
-            # test accuracy
-            net_glob.eval()
-            if args.dataset == 'sent140':
-                acc_t, loss_t = test_txt(net_glob, dataset_test, args)
-                acc_train, loss_train = test_txt(net_glob, dataset_train, args)
+            if args.attack and args.num_attacker > 0:
+                bd_loss_avg = float(bd_loss / args.num_attacker)
             else:
-                acc_t, loss_t = test_img(net_glob, dataset_test, args)
-                acc_train, loss_train = test_img(net_glob, dataset_train, args)
+                bd_loss_avg = None
+
+            loss_avg = sum(loss_locals) / len(loss_locals)
+
+            # -------------------------------------------------
+            # Evaluate resulting global model
+            # -------------------------------------------------
+            net_glob.eval()
+
+            if args.dataset == 'sent140':
+                acc_t, loss_t = test_txt(
+                    net_glob,
+                    dataset_test,
+                    args
+                )
+
+                acc_train, loss_train = test_txt(
+                    net_glob,
+                    dataset_train,
+                    args
+                )
+            else:
+                acc_t, loss_t = test_img(
+                    net_glob,
+                    dataset_test,
+                    args
+                )
+
+                acc_train, loss_train = test_img(
+                    net_glob,
+                    dataset_train,
+                    args
+                )
+
+            bd_acc_test = None
 
             if args.attack:
                 if args.dataset == 'sent140':
-                    bd_acc_test = test_bd_txt(net_glob, bX, bY, args, threshold=0.5, bs=args.bs)
-                    write_to_file(bd_acc_test, "BD_Acc_test_{}".format(per_run), directory_name, clear=first_call)
+                    bd_acc_test = test_bd_txt(
+                        net_glob,
+                        bX,
+                        bY,
+                        args,
+                        threshold=0.5,
+                        bs=args.bs,
+                    )
                 else:
-                    bd_acc_test = test_bd(net_glob, model_bd_test, args)
-                    write_to_file(bd_acc_test,"BD_Acc_test_{}".format(per_run), directory_name, clear=first_call)
-            write_to_file(acc_t,
-                              "Main_Acc_test_{}".format(per_run), directory_name, clear=first_call)
-            write_round_accuracy_summary(
-                directory_name=directory_name,
-                round_idx=iter,
-                asr=bd_acc_test if args.attack else None,
-                clean_acc=acc_t,
-                train_acc=acc_train,
-                clear=first_call,
-            )
-            if args.defense == 'ProbeGroup':
-                update_probe_round_summary_metrics(
-                    args=args,
-                    per_run=per_run,
-                    round_idx=iter,
-                    asr=bd_acc_test if args.attack else None,
-                    clean_acc=acc_t,
-                    train_acc=acc_train,
-                    test_loss=loss_t,
-                    train_loss=loss_train,
-                    avg_train_loss=loss_avg,
-                )
+                    bd_acc_test = test_bd(
+                        net_glob,
+                        model_bd_test,
+                        args,
+                    )
+
             t_end = time.time()
-            print("Training accuracy: {:.2f}".format(acc_train))
-            print("Round {:3d},Testing accuracy: {:.2f}, Average loss: {:.2f}, Time:  {:.2f}s".format(iter, acc_t, loss_avg, t_end - t_start))
+
+            # -------------------------------------------------
+            # ONE canonical raw record for this FL round
+            # -------------------------------------------------
+            round_record = {
+                "record_type": "round",
+                "round_indicator": int(run_id),
+                "round": int(iter),
+
+                "attack_active": bool(
+                    args.attack
+                    and iter >= args.attack_start_round
+                ),
+
+                "clients": {
+                    "participating": [
+                        int(x) for x in idxs_users
+                    ],
+
+                    "ordered_update_client_ids": [
+                        int(x) for x in users_idx
+                    ],
+
+                    "benign": [
+                        int(x) for x in idx_benign
+                    ],
+
+                    "attackers": [
+                        int(x) for x in idx_attacker
+                    ],
+
+                    "sample_counts": [
+                        int(x)
+                        for x in client_sample_counts
+                    ],
+
+                    "aggregation_length_basis": [
+                        float(x)
+                        for x in length_locals
+                    ],
+                },
+
+                "training": {
+                    "avg_local_train_loss":
+                        to_float(loss_avg),
+
+                    "backdoor_train_loss":
+                        bd_loss_avg,
+                },
+
+                "evaluation": {
+                    "clean_accuracy":
+                        to_float(acc_t),
+
+                    "train_accuracy":
+                        to_float(acc_train),
+
+                    "asr": (
+                        to_float(bd_acc_test)
+                        if bd_acc_test is not None
+                        else None
+                    ),
+
+                    "test_loss":
+                        to_float(loss_t),
+
+                    "train_loss":
+                        to_float(loss_train),
+                },
+
+                "defense": defense_telemetry,
+
+                "timing": {
+                    "round_seconds":
+                        float(t_end - t_start),
+                },
+            }
+
+            append_run_output(
+                path=run_output_path,
+                record=round_record,
+            )
+
+            print(
+                "Training accuracy: {:.2f}".format(
+                    acc_train
+                )
+            )
+
+            print(
+                "Round {:3d},Testing accuracy: {:.2f}, "
+                "Average loss: {:.2f}, Time: {:.2f}s".format(
+                    iter,
+                    acc_t,
+                    loss_avg,
+                    t_end - t_start,
+                )
+            )
             first_call = False
             last_iter_done = iter
             acc_test.append(to_float(acc_t))
